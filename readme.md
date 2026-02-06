@@ -12,7 +12,9 @@
 
 如果您是Minecraft玩家且拥有一定的常识，欢迎您申请加入糖醋鱼神人服务器，本服仅对少量人开放，服务器技术在线，有自研脚本mod，配置强大（9950X3D），存档会一直迁移继承建筑而不丢弃，服务器文件定期备份到多种网盘，您的肝度会永久保存。
 糖醋鱼服务器官网，以下均可：
+
 https://cn.tcymc.space
+
 https://tcymc.space
 
 ## 核心技术架构与原理
@@ -106,7 +108,7 @@ https://tcymc.space
 
 ```text
 您的游戏整合包文件夹 (名称可自定义)/
-├── TCY Client Updater.exe           <-- 【关键】必须放在这里，与 .minecraft 同级
+├── TCYClientUpdater-1.0.0.exe           <-- 【关键】必须放在这里，与 .minecraft 同级
 ├── launcher_settings.json           <-- (自动生成) 配置文件
 ├── launcher_debug.log               <-- (自动生成) 运行日志
 ├── .minecraft/                      <-- 游戏核心数据目录
