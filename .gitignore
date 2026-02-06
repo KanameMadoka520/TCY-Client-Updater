@@ -17,4 +17,4 @@ launcher_debug.log
 TCY-Client-Updater.new
 update_self.bat
 run-build.py.bat
-TCY一键git操作+deploy.bat
+TCY一键git push.bat
