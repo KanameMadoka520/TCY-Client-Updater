@@ -1,0 +1,19 @@
+# Python 编译文件
+__pycache__/
+*.py[cod]
+
+# PyInstaller 打包生成文件
+build/
+dist/
+*.spec
+
+# IDE 配置文件
+.vscode/
+.idea/
+
+# 敏感/临时文件
+*.log
+launcher_debug.log
+TCY-Client-Updater.new
+update_self.bat
+run-build.py.bat

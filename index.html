@@ -1,0 +1,2217 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+
+<head>
+    <meta charset="UTF-8">
+
+    <!--
+    PROJECT: TCY Client Updater
+    AUTHOR: KanameMadoka520
+    LICENSE: CC BY-NC-SA 4.0 (Creative Commons Attribution-NonCommercial-ShareAlike 4.0)
+
+    此项目遵循 CC BY-NC-SA 4.0 协议。
+    1. 允许非商业用途的复制、修改和分发。
+    2. 禁止任何形式的商业盈利行为（包括但不限于付费整合包、付费服专用客户端）。
+    3. 修改后的版本必须以相同协议（开源）发布，并保留原作者署名。
+
+    详情请参阅: https://creativecommons.org/licenses/by-nc-sa/4.0/
+-->
+
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>TCY Client Updater</title>
+    <style>
+        /* =========================================
+        1. 全局变量与高级动画曲线
+        ========================================= */
+        :root {
+            /* Apple 风格的非线性动画曲线，比默认 ease 更优雅 */
+            --ease-spring: cubic-bezier(0.4, 0.0, 0.2, 1);
+            --ease-bounce: cubic-bezier(0.34, 1.56, 0.64, 1);
+
+            /* 基础外观变量 */
+            --bg-image: none;
+            --bg-blur: 0px;
+            --bg-size: cover;
+            --mask-opacity: 0.4;
+            /* 默认值为 0 (即卡片默认不模糊) */
+            --card-blur: 0px;
+
+            /* 侧边栏和卡片背景 (配合 backdrop-filter 使用) */
+            --sidebar-bg: rgba(255, 255, 255, 0.65);
+            --card-bg: rgba(255, 255, 255, 0.65);
+
+            --font-family: 'Segoe UI', system-ui, sans-serif;
+            --text-color: #333333;
+            --accent-color: #f59e0b;
+
+            --text-shadow: none;
+            --border-color: rgba(0, 0, 0, 0.08);
+            --card-border: 1px solid rgba(255, 255, 255, 0.2);
+            /* 亮边 */
+
+            --titlebar-height: 32px;
+        }
+
+        /* =========================================
+        2. 基础布局
+        ========================================= */
+        body {
+            margin: 0;
+            padding: 0;
+            font-family: var(--font-family);
+            height: 100vh;
+            display: flex;
+            overflow: hidden;
+            user-select: none;
+            background: transparent;
+            color: var(--text-color);
+            text-shadow: var(--text-shadow);
+            transition: text-shadow 0.3s, color 0.3s;
+            border-radius: 12px;
+            /* 边框稍微调亮一点，增加精致感 */
+            border: 1px solid rgba(255, 255, 255, 0.25);
+            box-sizing: border-box;
+            clip-path: inset(0 round 12px);
+        }
+
+        #app-background {
+            position: fixed;
+            top: -20px;
+            left: -20px;
+            right: -20px;
+            bottom: -20px;
+            background-image: var(--bg-image);
+            background-size: var(--bg-size);
+            background-repeat: no-repeat;
+            background-position: center;
+            z-index: -2;
+            filter: blur(var(--bg-blur));
+            transition: filter 0.2s, background-size 0.3s;
+        }
+
+        #app-mask {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background-color: rgba(255, 255, 255, var(--mask-opacity));
+            z-index: -1;
+            transition: background-color 0.2s;
+        }
+
+        /* =========================================
+        3. 标题栏与窗口控制
+        ========================================= */
+        #custom-titlebar {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: var(--titlebar-height);
+            display: flex;
+            justify-content: flex-end;
+            align-items: center;
+            z-index: 9999;
+            background: transparent;
+        }
+
+        .drag-region {
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 100px;
+            height: 100%;
+            cursor: default;
+        }
+
+        .window-controls {
+            display: flex;
+            height: 100%;
+            z-index: 10000;
+        }
+
+        .win-btn {
+            width: 40px;
+            height: 100%;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            cursor: pointer;
+            transition: background 0.2s;
+            color: var(--text-color);
+            opacity: 0.7;
+        }
+
+        .win-btn:hover {
+            background: rgba(128, 128, 128, 0.2);
+            opacity: 1;
+        }
+
+        .win-btn.close:hover {
+            background: #e81123;
+            color: white;
+        }
+
+        .win-btn svg {
+            width: 12px;
+            height: 12px;
+            fill: none;
+            stroke: currentColor;
+            stroke-width: 1.5;
+        }
+
+        /* =========================================
+        4. 侧边栏 (Sidebar)
+        ========================================= */
+        .sidebar {
+            width: 220px;
+            background: var(--sidebar-bg);
+            border-right: 1px solid var(--border-color);
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+            padding: 0 16px 24px 16px;
+            padding-top: var(--titlebar-height);
+
+            /* 毛玻璃增强 */
+            backdrop-filter: blur(20px);
+            -webkit-backdrop-filter: blur(20px);
+
+            transition: background 0.2s, backdrop-filter 0.2s, border-right 0.2s;
+        }
+
+        .brand {
+            font-size: 16px;
+            font-weight: 800;
+            color: var(--accent-color);
+            margin: 10px 0 24px 0;
+            padding-left: 12px;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            letter-spacing: 0.5px;
+            text-shadow: none;
+            pointer-events: none;
+        }
+
+        .icon {
+            width: 18px;
+            height: 18px;
+            fill: none;
+            stroke: currentColor;
+            stroke-width: 2;
+            stroke-linecap: round;
+            stroke-linejoin: round;
+        }
+
+        .nav-item {
+            padding: 12px 16px;
+            border-radius: 10px;
+            cursor: pointer;
+            font-weight: 600;
+            font-size: 14px;
+            color: var(--text-color);
+            opacity: 0.8;
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            /* 使用平滑过渡 */
+            transition: all 0.3s var(--ease-spring);
+            position: relative;
+            overflow: hidden;
+        }
+
+        body.transparent-mode .nav-item {
+            opacity: 1;
+        }
+
+        .nav-item:hover {
+            background: rgba(255, 255, 255, 0.5);
+            opacity: 1;
+            transform: scale(1.02);
+            /* 悬停微动 */
+        }
+
+        .nav-item:active {
+            transform: scale(0.96);
+            /* 点击回弹 */
+        }
+
+        .nav-item.active {
+            background: var(--accent-color);
+            color: white;
+            opacity: 1;
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+            text-shadow: none;
+        }
+
+        .nav-item.active .icon {
+            stroke: white;
+        }
+
+        /* =========================================
+        5. 主内容区域 (Main)
+        ========================================= */
+        .main {
+            flex: 1;
+            padding: 20px 40px;
+            padding-top: calc(var(--titlebar-height) + 20px);
+            overflow-y: overlay;
+            position: relative;
+        }
+
+        /* 滚动条样式 */
+        .main::-webkit-scrollbar-track {
+            background: transparent;
+        }
+
+        .main::-webkit-scrollbar {
+            width: 8px;
+            background: transparent;
+        }
+
+        .main::-webkit-scrollbar-thumb {
+            background-color: transparent;
+            border-radius: 4px;
+            transition: background-color 0.3s ease;
+        }
+
+        .main:hover::-webkit-scrollbar-thumb {
+            background-color: rgba(0, 0, 0, 0.2);
+        }
+
+        body.transparent-mode .main:hover::-webkit-scrollbar-thumb {
+            background-color: rgba(255, 255, 255, 0.3);
+        }
+
+        .main.is-scrolling::-webkit-scrollbar-thumb {
+            background-color: rgba(0, 0, 0, 0.3) !important;
+        }
+
+        body.transparent-mode .main.is-scrolling::-webkit-scrollbar-thumb {
+            background-color: rgba(255, 255, 255, 0.4) !important;
+        }
+
+        .page {
+            display: none;
+            /* 页面切换动画 */
+            animation: fadeIn 0.3s var(--ease-spring);
+        }
+
+        .page.active {
+            display: block;
+        }
+
+        @keyframes fadeIn {
+            from {
+                opacity: 0;
+                transform: translateY(10px);
+            }
+
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+
+        h1 {
+            font-size: 24px;
+            font-weight: 700;
+            margin: 0 0 20px 0;
+            color: var(--text-color);
+        }
+
+        h3 {
+            color: var(--text-color);
+        }
+
+        /* =========================================
+        6. 卡片 (Card) - 核心美化区域
+        ========================================= */
+        /* 1. 定义流光动画的关键帧 (放在 .card 之前) */
+        @keyframes border-dance {
+            0% { background-position: 0% 50%; }
+            50% { background-position: 100% 50%; }
+            100% { background-position: 0% 50%; }
+        }
+
+        /* 2. 主卡片样式 */
+        .card {
+            background: var(--card-bg);
+
+            /* 【修改】不再写死 12px，而是使用变量 (保留原有逻辑) */
+            backdrop-filter: blur(var(--card-blur));
+            -webkit-backdrop-filter: blur(var(--card-blur));
+
+            border-radius: 16px;
+            padding: 24px;
+            margin-bottom: 20px;
+
+            /* 高级质感边框 (半透明白线) */
+            border: 1px solid rgba(255, 255, 255, 0.25);
+
+            /* 初始状态阴影 */
+            box-shadow: 0 4px 10px rgba(0, 0, 0, 0.03);
+
+            /* 关键：使用贝塞尔曲线实现顺滑的悬浮过渡 */
+            transition: transform 0.4s var(--ease-spring),
+                box-shadow 0.4s var(--ease-spring),
+                border-color 0.3s ease,
+                backdrop-filter 0.1s; /* 模糊的过渡动画 */
+            
+            /* 性能优化 */
+            will-change: transform, box-shadow;
+
+            /* === 关键布局属性 === */
+            /* 设置为 relative 以便定位伪元素边框 */
+            position: relative;
+            /* 防止流光溢出圆角 */
+            overflow: hidden; 
+            /* 建立层叠上下文，保证伪元素在正确层级 */
+            z-index: 1; 
+        }
+
+        /* === 伪元素动态流光层 === */
+        .card::before {
+            content: "";
+            position: absolute;
+            inset: 0;
+            padding: 2px; /* 流光边框宽度 */
+            border-radius: 16px; /* 需与父元素一致 */
+            
+            /* 使用主题色进行渐变，模拟 RGB 呼吸灯 */
+            /* 这里的 40%-60% 控制光束的粗细 */
+            background: linear-gradient(
+                45deg, 
+                transparent 40%, 
+                var(--accent-color) 50%, 
+                transparent 60%
+            );
+            background-size: 200% 200%; /* 放大背景以支持移动动画 */
+            
+            /* 默认隐藏，悬停时显示 */
+            opacity: 0;
+            transition: opacity 0.3s ease;
+            
+            /* 利用遮罩裁切出边框形状 (中间镂空) */
+            /* 这样背景只会显示在 padding 定义的边缘区域 */
+            -webkit-mask: 
+            linear-gradient(#fff 0 0) content-box, 
+            linear-gradient(#fff 0 0);
+            -webkit-mask-composite: xor;
+            mask-composite: exclude;
+            
+            pointer-events: none; /* 让鼠标穿透，不影响点击卡片内容 */
+            z-index: -1; /* 放在内容之下，但在背景之上(因 mask 镂空) */
+        }
+
+        /* 鼠标悬停时的“物理上浮”效果 (保留原有) */
+        .card:hover {
+            transform: translateY(-4px);
+            /* 浮起 */
+            box-shadow: 0 12px 24px rgba(0, 0, 0, 0.08);
+            /* 投影加深 */
+            border-color: rgba(255, 255, 255, 0.5);
+            /* 边框变亮 */
+        }
+
+        /* === 悬停时触发流光 === */
+        .card:hover::before {
+            opacity: 1; /* 显示流光 */
+            animation: border-dance 2s linear infinite; /* 开始循环流动 */
+        }
+
+        /* =========================================
+        7. 按钮 (Button)
+        ========================================= */
+        .btn {
+            padding: 10px 18px;
+            border-radius: 8px;
+            border: none;
+            cursor: pointer;
+            font-weight: 600;
+            font-size: 13px;
+            background: var(--accent-color);
+            color: white;
+            /* 平滑过渡 */
+            transition: all 0.3s var(--ease-spring);
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            text-shadow: none;
+            position: relative;
+            overflow: hidden;
+        }
+
+        .btn:hover {
+            opacity: 0.9;
+            transform: translateY(-2px);
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+        }
+
+        .btn:active {
+            transform: scale(0.95);
+            /* 果冻点击感 */
+            box-shadow: none;
+        }
+
+        .btn.outline {
+            background: rgba(255, 255, 255, 0.4);
+            border: 1px solid #ddd;
+            color: var(--text-color);
+        }
+
+        body.transparent-mode .btn.outline {
+            background: rgba(255, 255, 255, 0.6);
+            border-color: rgba(255, 255, 255, 0.8);
+        }
+
+        .btn.small {
+            padding: 6px 12px;
+            font-size: 12px;
+        }
+
+        .btn.danger {
+            background: #ef4444;
+        }
+
+        .btn.danger-outline {
+            background: transparent;
+            border: 1px solid #ef4444;
+            color: #ef4444;
+        }
+
+        .btn.danger-outline:hover {
+            background: #fee2e2;
+        }
+
+        /* =========================================
+        8. 表单控件与日志
+        ========================================= */
+        select,
+        input[type="text"] {
+            padding: 10px;
+            border-radius: 8px;
+            border: 1px solid #ddd;
+            width: 100%;
+            outline: none;
+            font-family: inherit;
+            color: #333;
+            box-sizing: border-box;
+            transition: border 0.2s, box-shadow 0.2s;
+        }
+
+        select:focus,
+        input[type="text"]:focus {
+            border-color: var(--accent-color);
+            box-shadow: 0 0 0 3px rgba(245, 158, 11, 0.2);
+            /* 聚焦光环 */
+        }
+
+        input[type="range"] {
+            flex: 1;
+            accent-color: var(--accent-color);
+            height: 4px;
+            border-radius: 2px;
+        }
+
+        .log-box {
+            background: #111827;
+            color: #10b981;
+            padding: 16px;
+            border-radius: 12px;
+            height: 180px;
+            overflow-y: auto;
+            font-family: 'Consolas', monospace;
+            font-size: 12px;
+            line-height: 1.5;
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            text-shadow: none;
+        }
+
+        .log-box::-webkit-scrollbar-track {
+            background: transparent;
+        }
+
+        .log-box::-webkit-scrollbar {
+            width: 6px;
+            background: transparent;
+        }
+
+        .log-box::-webkit-scrollbar-thumb {
+            background: rgba(255, 255, 255, 0.1);
+            border-radius: 3px;
+        }
+
+        .log-box:hover::-webkit-scrollbar-thumb {
+            background: rgba(255, 255, 255, 0.3);
+        }
+
+        .log-item {
+            margin-bottom: 6px;
+            padding-bottom: 6px;
+            border-bottom: 1px dashed rgba(255, 255, 255, 0.1);
+            /* 日志滑入动画 */
+            animation: slideInLog 0.3s ease-out forwards;
+            opacity: 0;
+            transform: translateX(-10px);
+        }
+
+        .log-item:last-child {
+            border-bottom: none;
+        }
+
+        @keyframes slideInLog {
+            to {
+                opacity: 1;
+                transform: translateX(0);
+            }
+        }
+
+        /* =========================================
+        9. 进度条增强 (流光效果)
+        ========================================= */
+        #dl-bar {
+            position: relative;
+            overflow: hidden;
+            /* 斜纹流光背景 */
+            background-image: linear-gradient(45deg,
+                    rgba(255, 255, 255, 0.15) 25%,
+                    transparent 25%,
+                    transparent 50%,
+                    rgba(255, 255, 255, 0.15) 50%,
+                    rgba(255, 255, 255, 0.15) 75%,
+                    transparent 75%,
+                    transparent);
+            background-size: 20px 20px;
+            animation: stripe-flow 1s linear infinite;
+        }
+
+        @keyframes stripe-flow {
+            0% {
+                background-position: 0 0;
+            }
+
+            100% {
+                background-position: 20px 20px;
+            }
+        }
+
+        /* =========================================
+        10. 弹窗模态框 (Modal) 动画
+        ========================================= */
+        #update-modal {
+            transition: opacity 0.3s var(--ease-spring), backdrop-filter 0.3s;
+        }
+
+        /* 当模态框里的卡片出现时，从下往上弹起 */
+        #update-modal .card {
+            animation: modal-pop 0.4s var(--ease-bounce) forwards;
+        }
+
+        @keyframes modal-pop {
+            0% {
+                opacity: 0;
+                transform: scale(0.9) translateY(20px);
+            }
+
+            100% {
+                opacity: 1;
+                transform: scale(1) translateY(0);
+            }
+        }
+
+        /* =========================================
+        11. 其他组件 (File Items, Alerts, Badges)
+        ========================================= */
+        .file-item {
+            padding: 10px 12px;
+            border-bottom: 1px solid var(--border-color);
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            font-size: 13px;
+            transition: background 0.2s;
+        }
+
+        .file-item:hover {
+            background: rgba(0, 0, 0, 0.02);
+        }
+
+        .file-item:last-child {
+            border-bottom: none;
+        }
+
+        .folder-header {
+            padding: 8px 12px;
+            cursor: pointer;
+            font-weight: 600;
+            color: var(--text-color);
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            border-radius: 6px;
+            transition: background 0.2s;
+        }
+
+        .folder-header:hover {
+            background: rgba(0, 0, 0, 0.05);
+        }
+
+        .folder-content {
+            padding-left: 24px;
+            display: none;
+            margin-top: 4px;
+        }
+
+        .folder-item.open>.folder-content {
+            display: block;
+        }
+
+        /* 警告框统一样式 */
+        .alert-error,
+        .alert-info,
+        .alert-warning {
+            border-radius: 10px;
+            margin-bottom: 20px;
+            font-weight: 500;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            font-size: 14px;
+            text-shadow: none;
+            box-shadow: 0 2px 5px rgba(0, 0, 0, 0.05);
+        }
+
+        .alert-error {
+            padding: 12px 16px;
+            background: #fee2e2;
+            color: #991b1b;
+        }
+
+        .alert-info {
+            padding: 12px 16px;
+            background: #e0f2fe;
+            color: #075985;
+        }
+
+        .alert-warning {
+            padding: 10px 14px;
+            background: #ffedd5;
+            color: #9a3412;
+            border-left: 4px solid #f97316;
+        }
+
+        .web-link-group {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 15px 0;
+            border-bottom: 1px solid rgba(0, 0, 0, 0.05);
+        }
+
+        .web-link-group:last-child {
+            border-bottom: none;
+        }
+
+        .web-title {
+            font-weight: 600;
+            color: var(--text-color);
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .web-actions {
+            display: flex;
+            gap: 8px;
+        }
+
+        .color-dot {
+            width: 24px;
+            height: 24px;
+            border-radius: 50%;
+            cursor: pointer;
+            border: 2px solid transparent;
+            transition: transform 0.2s var(--ease-spring), border-color 0.2s;
+        }
+
+        .color-dot:hover {
+            transform: scale(1.2);
+        }
+
+        .color-dot.active {
+            border-color: #333;
+            transform: scale(1.1);
+        }
+
+        body.transparent-mode .color-dot.active {
+            border-color: white;
+        }
+
+        .control-group {
+            margin-bottom: 15px;
+        }
+
+        .control-label {
+            font-size: 13px;
+            font-weight: 600;
+            margin-bottom: 6px;
+            display: block;
+            opacity: 0.8;
+        }
+
+        .control-row {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .ver-title {
+            font-weight: bold;
+            color: var(--accent-color);
+            display: flex;
+            justify-content: space-between;
+            font-size: 14px;
+        }
+
+        .ver-title small {
+            font-weight: normal;
+            opacity: 0.6;
+            font-size: 11px;
+            color: var(--text-color);
+        }
+
+        .ver-desc {
+            font-size: 13px;
+            opacity: 0.8;
+            margin-top: 4px;
+            line-height: 1.4;
+            white-space: pre-wrap;
+        }
+
+        /* 更新列表样式 */
+        .update-list-container {
+            max-height: 250px;
+            overflow-y: auto;
+            background: rgba(0, 0, 0, 0.03);
+            /* 微调：更淡的背景 */
+            border-radius: 8px;
+            padding: 10px;
+            margin-bottom: 15px;
+            box-shadow: inset 0 2px 4px rgba(0, 0, 0, 0.05);
+            /* 内阴影增加层次 */
+        }
+
+        .update-item {
+            display: flex;
+            align-items: flex-start;
+            gap: 10px;
+            padding: 10px;
+            background: rgba(255, 255, 255, 0.6);
+            border-radius: 6px;
+            margin-bottom: 8px;
+            border: 1px solid rgba(0, 0, 0, 0.05);
+            transition: transform 0.2s, background 0.2s;
+        }
+
+        .update-item:hover {
+            transform: translateX(2px);
+            background: rgba(255, 255, 255, 0.8);
+        }
+
+        .update-item.mandatory {
+            border-left: 4px solid #ef4444;
+        }
+
+        .update-item.optional {
+            border-left: 4px solid #10b981;
+        }
+
+        .update-checkbox {
+            margin-top: 4px;
+            width: 18px;
+            height: 18px;
+            accent-color: var(--accent-color);
+        }
+
+        .update-content {
+            flex: 1;
+        }
+
+        .update-header {
+            font-weight: bold;
+            font-size: 14px;
+            display: flex;
+            justify-content: space-between;
+        }
+
+        .update-badge {
+            font-size: 10px;
+            padding: 2px 6px;
+            border-radius: 4px;
+            color: white;
+            margin-left: 8px;
+        }
+
+        .badge-req {
+            background: #ef4444;
+        }
+
+        .badge-opt {
+            background: #10b981;
+        }
+
+        .update-body {
+            font-size: 12px;
+            margin-top: 4px;
+            opacity: 0.8;
+            white-space: pre-wrap;
+        }
+        /* =========================================
+        故障风文字 (Glitch Text)
+        应用位置：侧边栏标题内的 span (.glitch-text)
+        ========================================= */
+
+        /* 1. 定义抖动动画 */
+        @keyframes glitch-skew {
+            0% { transform: skew(0deg); }
+            20% { transform: skew(-2deg); }
+            40% { transform: skew(2deg); }
+            60% { transform: skew(-1deg); }
+            80% { transform: skew(1deg); }
+            100% { transform: skew(0deg); }
+        }
+
+        /* 2. 定义裁切闪烁动画 */
+        @keyframes glitch-anim {
+            0% { clip-path: inset(80% 0 0 0); transform: translate(-2px, 1px); }
+            20% { clip-path: inset(10% 0 60% 0); transform: translate(2px, -1px); }
+            40% { clip-path: inset(50% 0 30% 0); transform: translate(-2px, 2px); }
+            60% { clip-path: inset(30% 0 20% 0); transform: translate(2px, -2px); }
+            80% { clip-path: inset(15% 0 80% 0); transform: translate(-1px, 1px); }
+            100% { clip-path: inset(60% 0 10% 0); transform: translate(1px, -1px); }
+        }
+
+        /* 3. 设置父级 .brand 样式 (确保布局正常) */
+        .brand {
+            font-size: 16px;
+            font-weight: 800;
+            color: var(--accent-color);
+            margin: 10px 0 24px 0;
+            padding-left: 12px;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            letter-spacing: 0.5px;
+            text-shadow: none;
+            /* 移除 pointer-events: none，否则鼠标放上去没反应！ */
+            pointer-events: auto; 
+            cursor: default;
+        }
+
+        /* 4. 文字包裹层样式 */
+        .glitch-text {
+            position: relative;
+            display: inline-block;
+            color: var(--accent-color); /* 默认显示强调色 */
+            transition: color 0.3s;
+        }
+
+        /* 5. 鼠标悬停在 brand 上时，触发 glitch-text 的动画 */
+        .brand:hover .glitch-text {
+            animation: glitch-skew 0.3s cubic-bezier(0.25, 0.46, 0.45, 0.94) both infinite;
+            color: var(--text-color); /* 故障时文字变黑/白，增强对比 */
+        }
+
+        /* 6. 生成故障分身 (幽灵图层) */
+        .brand:hover .glitch-text::before,
+        .brand:hover .glitch-text::after {
+            content: attr(data-text); /* 读取 HTML 里的 data-text */
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: var(--sidebar-bg); /* 背景遮挡，制造切割感 */
+            opacity: 0.8;
+        }
+
+        /* 红色分身 */
+        .brand:hover .glitch-text::before {
+            left: 2px;
+            color: #ff00c1;
+            text-shadow: -1px 0 #ff00c1;
+            animation: glitch-anim 0.4s infinite linear alternate-reverse;
+            z-index: -1;
+        }
+
+        /* 青色分身 */
+        .brand:hover .glitch-text::after {
+            left: -2px;
+            color: #00fff9;
+            text-shadow: -1px 0 #00fff9;
+            animation: glitch-anim 0.4s infinite linear alternate-reverse;
+            animation-delay: -0.2s;
+            z-index: -2;
+        }
+    </style>
+</head>
+
+<body>
+    <canvas id="particle-canvas"
+        style="position:fixed; top:0; left:0; width:100%; height:100%; z-index:-1; pointer-events:none;"></canvas>
+    
+    <div id="app-background"></div>
+    <div id="app-mask"></div>
+
+    <div id="custom-titlebar">
+        <div class="drag-region pywebview-drag-region"></div>
+        <div class="window-controls">
+            <div class="win-btn" onclick="windowControls('min')" title="最小化">
+                <svg viewBox="0 0 12 12">
+                    <path d="M1 6h10" stroke-linecap="round" />
+                </svg>
+            </div>
+            <div class="win-btn" onclick="windowControls('max')" title="最大化/还原">
+                <svg viewBox="0 0 12 12">
+                    <rect x="1.5" y="1.5" width="9" height="9" rx="1" />
+                </svg>
+            </div>
+            <div class="win-btn close" onclick="windowControls('close')" title="关闭">
+                <svg viewBox="0 0 12 12">
+                    <path d="M2 2l8 8M10 2l-8 8" stroke-linecap="round" />
+                </svg>
+            </div>
+        </div>
+    </div>
+
+    <div class="sidebar">
+        <div class="brand">
+            <svg class="icon" style="width:24px; height:24px;" viewBox="0 0 24 24">
+                <path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5" />
+            </svg>
+            <span class="glitch-text" data-text="TCY Client Updater">TCY Client Updater</span>
+        </div>
+
+        <div id="nav-update" class="nav-item active" onclick="switchTab('update')">
+            <svg class="icon" viewBox="0 0 24 24">
+                <path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"></path>
+                <polyline points="9 22 9 12 15 12 15 22"></polyline>
+            </svg>
+            版本更新
+        </div>
+        <div id="nav-mods" class="nav-item" onclick="switchTab('mods')">
+            <svg class="icon" viewBox="0 0 24 24">
+                <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path>
+            </svg>
+            Mods 管理
+        </div>
+        <div id="nav-config" class="nav-item" onclick="switchTab('config')">
+            <svg class="icon" viewBox="0 0 24 24">
+                <line x1="4" y1="21" x2="4" y2="14"></line>
+                <line x1="4" y1="10" x2="4" y2="3"></line>
+                <line x1="12" y1="21" x2="12" y2="12"></line>
+                <line x1="12" y1="8" x2="12" y2="3"></line>
+                <line x1="20" y1="21" x2="20" y2="16"></line>
+                <line x1="20" y1="12" x2="20" y2="3"></line>
+                <line x1="1" y1="14" x2="7" y2="14"></line>
+                <line x1="9" y1="8" x2="15" y2="8"></line>
+                <line x1="17" y1="16" x2="23" y2="16"></line>
+            </svg>
+            Config 管理
+        </div>
+        <div id="nav-shortcuts" class="nav-item" onclick="switchTab('shortcuts')">
+            <svg class="icon" viewBox="0 0 24 24">
+                <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"></path>
+                <polyline points="15 3 21 3 21 9"></polyline>
+                <line x1="10" y1="14" x2="21" y2="3"></line>
+            </svg>
+            快捷打开
+        </div>
+        <div id="nav-settings" class="nav-item" onclick="switchTab('settings')">
+            <svg class="icon" viewBox="0 0 24 24">
+                <circle cx="12" cy="12" r="3"></circle>
+                <path
+                    d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z">
+                </path>
+            </svg>
+            个性化
+        </div>
+        <div style="flex:1"></div>
+        <div id="nav-web" class="nav-item" onclick="switchTab('web')">
+            <svg class="icon" viewBox="0 0 24 24">
+                <circle cx="12" cy="12" r="10"></circle>
+                <line x1="2" y1="12" x2="22" y2="12"></line>
+                <path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z">
+                </path>
+            </svg>
+            神人服务器官方网站
+        </div>
+    </div>
+
+    <div class="main">
+        <div id="page-update" class="page active">
+            <h1>客户端更新</h1>
+
+            <div class="alert-info">
+                <svg class="icon" style="width:20px; height:20px" viewBox="0 0 24 24">
+                    <circle cx="12" cy="12" r="10"></circle>
+                    <line x1="12" y1="16" x2="12" y2="12"></line>
+                    <line x1="12" y1="8" x2="12.01" y2="8"></line>
+                </svg>
+                提示：请把本升级器放在 .minecraft 同级目录,
+                有问题请带着launcher_debug.log在github issue或在QQ群反馈.支持功能许愿!
+            </div>
+            <div class="alert-info">
+                <svg class="icon" style="width:20px; height:20px" viewBox="0 0 24 24">
+                    <circle cx="12" cy="12" r="10"></circle>
+                    <line x1="12" y1="16" x2="12" y2="12"></line>
+                    <line x1="12" y1="8" x2="12.01" y2="8"></line>
+                </svg>
+                    不可删除同目录下launcher_settings.json文件,否则之前的设置和版本识别记录丢失。
+            </div>
+
+
+            <div id="path-warning" class="alert-error" style="display:none;">
+                <svg class="icon" style="width:20px; height:20px" viewBox="0 0 24 24">
+                    <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z">
+                    </path>
+                    <line x1="12" y1="9" x2="12" y2="13"></line>
+                    <line x1="12" y1="17" x2="12.01" y2="17"></line>
+                </svg>
+                未检测到“<span id="target-version-name"></span>”目录，请检查安装位置！
+            </div>
+
+            <div id="path-success" class="alert-info" style="display:none; background:#dcfce7; color:#166534;">
+                <svg class="icon" style="width:20px; height:20px" viewBox="0 0 24 24">
+                    <path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"></path>
+                    <polyline points="22 4 12 14.01 9 11.01"></polyline>
+                </svg>
+                已识别目录：<span id="detected-path-text" style="font-family:monospace; font-size:12px;"></span>
+            </div>
+                
+            <div class="alert-warning">
+                本更新包的基础是你拥有"Minecraft糖醋鱼神人服务器客户端 20260125
+                异界生活冒险"客户端or旧客户端安装了"【新玩家无视本文件】全量mods文件夹替换用-旧客户端升级.zip"---------在确保你的客户端正确后,如果目录不对请立即检查或反馈给糖醋鱼,TCY神人服务器的客户端应当看见至少包含".minecraft\versions\异界战斗幻想
+            </div>
+
+            <div class="card">
+                <h3
+                    style="margin-top:0; font-size:16px; display:flex; justify-content:space-between; align-items:center;">
+                    在线更新
+                    <button class="btn small" onclick="pywebview.api.check_online_update()">
+                        <svg class="icon" viewBox="0 0 24 24">
+                            <path d="M23 4v6h-6"></path>
+                            <path d="M1 20v-6h6"></path>
+                            <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"></path>
+                        </svg>
+                        检查更新
+                    </button>
+                </h3>
+                <div style="font-size:12px; opacity:0.8; margin-top:5px;">
+                    客户端版本：<span id="current-ver-display"
+                        style="font-weight:bold; color:var(--accent-color)">Loading...</span>
+                    <span style="margin: 0 10px; opacity:0.3">|</span>
+                    更新器版本：<span id="launcher-ver-display" style="font-weight:bold;">Loading...</span>
+                </div>
+            </div>
+
+            <div class="card" style="border-left: 4px solid #64748b;">
+                <h3 style="margin-top:0; font-size:16px; display:flex; align-items:center; gap:8px;">
+                    <svg class="icon" viewBox="0 0 24 24">
+                        <path
+                            d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z">
+                        </path>
+                        <polyline points="3.27 6.96 12 12.01 20.73 6.96"></polyline>
+                        <line x1="12" y1="22.08" x2="12" y2="12"></line>
+                    </svg>
+                    手动 / 离线安装更新包
+                </h3>
+
+                <div style="font-size:13px; opacity:0.8; margin-bottom:12px; line-height: 1.6;">
+                    <div style="margin-bottom:4px;">适用于无法连接官网tcymc.space,无法获得官网提供的json版本信息文件内容，或需强制回退旧版本的特殊情况。</div>
+                    <ul style="margin: 0; padding-left: 18px; font-size: 12px; color:var(--text-color);">
+                        <li><strong>识别规则：</strong> 自动扫描目录下的 <code>update_*.zip</code> 文件。</li>
+                        <li><strong>⚠️ 注意：</strong> 此模式将<span style="color:#ef4444; font-weight:bold;">忽略可选更新规则</span>，强制执行包内所有变更。
+                        </li>
+                    </ul>
+                </div>
+
+                <select id="version-select" style="margin:5px 0 15px 0; font-family: 'Consolas', monospace;"></select>
+
+                <div style="display:flex; gap:10px;">
+                    <button class="btn" onclick="startUpdate()">
+                        <svg class="icon" style="width:14px; height:14px" viewBox="0 0 24 24">
+                            <path d="M13 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"></path>
+                            <polyline points="13 2 13 9 20 9"></polyline>
+                        </svg>
+                        开始安装
+                    </button>
+                    <button class="btn outline" onclick="refreshVersions()">
+                        <svg class="icon" style="width:14px; height:14px" viewBox="0 0 24 24">
+                            <path d="M23 4v6h-6"></path>
+                            <path d="M1 20v-6h6"></path>
+                            <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"></path>
+                        </svg>
+                        刷新列表
+                    </button>
+                </div>
+            </div>
+            <div class="card">
+                <h3 style="margin-top:0; font-size:16px;">执行日志</h3>
+                <div class="log-box" id="log-container">
+                    <div>[神人更新器系统] 等待操作中...</div>
+                </div>
+            </div>
+        </div>
+
+        <div id="page-mods" class="page">
+            <h1>mods 管理</h1>
+            <div class="card" style="margin-bottom: 14px; font-size: 13px; line-height: 1.4; color: #000000;">
+                <details>
+                    <summary style="cursor: pointer; outline: none; list-style: none;">
+                        <h3 style="display: inline-block; margin-top: 0; margin-bottom: 0; font-size: 1.17em;">
+                            ℹ️ 模组来源与恢复指南 <span
+                                style="font-size: 12px; font-weight: normal; opacity: 0.6; margin-left: 5px;">(点击展开查看)</span>
+                        </h3>
+                    </summary>
+            
+                    <div
+                        style="margin-top: 10px; padding-top: 10px; border-top: 1px solid rgba(0,0,0,0.1); animation: fadeIn 0.3s ease;">
+                        <div style="margin-bottom: 15px;">
+                            <strong>1. 模组来源说明：</strong><br>
+                            <span style="color: #333333;">本客户端模组应当包含以下来源，请勿随意混入来源不明的文件：</span>
+                            <ul style="margin: 5px 0; padding-left: 20px; color: #333333;">
+                                <li>基础包自带：<span style="color: #0056b3; font-weight: bold;">Minecraft糖醋鱼神人服务器客户端 20260125
+                                        异界生活冒险.zip</span></li>
+                                <li>或替换包：<span style="color: #0056b3; font-weight: bold;">【新玩家无视本文件】全量mods文件夹替换用-旧客户端升级.zip</span>
+                                </li>
+                                <li>以及：<strong>本更新器后续自动下载的更新文件。</strong></li>
+                            </ul>
+                        </div>
+            
+                        <div>
+                            <strong style="color: #d32f2f;">2. 误删恢复 / 坏档修复 (重要)：</strong><br>
+                            <span style="color: #333333;">如果您不小心误删了模组，请严格按照以下步骤操作：</span>
+                            <ol style="margin-top: 8px; padding-left: 20px; color: #333333;">
+                                <li>前往 <b>【神人服务器官方网站】</b> - <b>【服务器文件下载】</b> 页面。</li>
+                                <li>下载 <span style="color: #0056b3; font-weight: bold;">【新玩家无视本文件】全量mods文件夹替换用-旧客户端升级.zip</span>。
+                                </li>
+                                <li>解压并将里面的文件 <strong>全量覆盖</strong> 到您当前的 <code>mods</code> 文件夹中。</li>
+                                <li>
+                                    修改更新器同目录下的 <span style="color: #e65100; font-weight: bold;">launcher_settings.json</span>
+                                    文件：<br>
+                                    找到 <code>"current_version"</code> 栏目，将其修改为：
+                                    <div
+                                        style="background: #f5f5f5; border: 1px solid #ccc; padding: 5px 10px; border-radius: 4px; margin: 5px 0; font-family: monospace; color: #2e7d32;">
+                                        "current_version": "26.02.06.15.24"
+                                    </div>
+                                </li>
+                                <li>保存文件后 <strong>重启本更新器</strong>。更新器将默认您处于初始版本，并逐步获取后续的所有更新模组，您只需依次点击更新即可。</li>
+                            </ol>
+                        </div>
+                    </div>
+                </details>
+            </div>
+            <div style="margin-bottom:15px; display:flex; gap:10px;">
+                <button class="btn outline" onclick="loadFiles('mods')">刷新列表</button>
+                <button class="btn outline" onclick="pywebview.api.open_folder('mods')">打开mods文件夹</button>
+                <input type="text" id="search-mods" placeholder="🔍 搜索 mod (支持正则,也可搜到文件夹内的文件)..."
+                    style="flex:1; padding:8px; border-radius:8px; border:1px solid #ddd;" oninput="filterFiles('mods', this.value)">
+            </div>
+
+            <div class="card" id="mods-list">模组列表加载中...如果刷新也无效,请检查更新器是否放对地方</div>
+        </div>
+
+        <div id="page-config" class="page">
+            <h1>config 管理</h1>
+            <div class="alert-warning">
+                双击可打开对应文件，除非你知道你在做什么，否则不要修改。在多人游戏里仅对客户端mod生效，在单人游戏里全部生效。
+            </div>
+            <div style="margin-bottom:15px; display:flex; gap:10px;">
+                <button class="btn outline" onclick="loadFiles('config')">刷新列表</button>
+                <button class="btn outline" onclick="pywebview.api.open_folder('config')">打开config文件夹</button>
+                <input type="text" id="search-config" placeholder="🔍 搜索 config (支持正则,也可搜到文件夹内的文件)..."
+                    style="flex:1; padding:8px; border-radius:8px; border:1px solid #ddd;" oninput="filterFiles('config', this.value)">
+            </div>
+            <div class="card" id="config-list">配置列表加载中...如果刷新也无效,请检查更新器是否放对地方</div>
+        </div>
+
+        <div id="page-shortcuts" class="page">
+            <h1>快捷打开</h1>
+            <div class="alert-info">
+                此处只能打开TCY神人服务器所用“异界战斗幻想”版本文件夹内的内容。后续等待开发其他功能
+            </div>
+            <div class="card">
+                <div style="display:flex; flex-direction:column; gap:15px;">
+                    <button class="btn outline" onclick="openShortcut('resourcepacks')"
+                        style="justify-content:flex-start">
+                        <svg class="icon" viewBox="0 0 24 24">
+                            <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z">
+                            </path>
+                        </svg>
+                        打开材质包文件夹 (resourcepacks)
+                    </button>
+                    <button class="btn outline" onclick="openShortcut('shaderpacks')"
+                        style="justify-content:flex-start">
+                        <svg class="icon" viewBox="0 0 24 24">
+                            <circle cx="12" cy="12" r="5"></circle>
+                            <line x1="12" y1="1" x2="12" y2="3"></line>
+                            <line x1="12" y1="21" x2="12" y2="23"></line>
+                            <line x1="4.22" y1="4.22" x2="5.64" y2="5.64"></line>
+                            <line x1="18.36" y1="18.36" x2="19.78" y2="19.78"></line>
+                            <line x1="1" y1="12" x2="3" y2="12"></line>
+                            <line x1="21" y1="12" x2="23" y2="12"></line>
+                            <line x1="4.22" y1="19.78" x2="5.64" y2="18.36"></line>
+                            <line x1="18.36" y1="5.64" x2="19.78" y2="4.22"></line>
+                        </svg>
+                        打开光影包文件夹 (shaderpacks)
+                    </button>
+                    <button class="btn outline" onclick="openShortcut('screenshots')"
+                        style="justify-content:flex-start">
+                        <svg class="icon" viewBox="0 0 24 24">
+                            <path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z">
+                            </path>
+                            <circle cx="12" cy="13" r="4"></circle>
+                        </svg>
+                        打开游戏截图文件夹 (screenshots)
+                    </button>
+                </div>
+            </div>
+        </div>
+
+        <div id="page-web" class="page">
+            <h1>神人服务器官方网站</h1>
+            <div class="card">
+                <div class="web-link-group">
+                    <div class="web-title">📢 最新更新日志</div>
+                    <div class="web-actions">
+                        <button class="btn small outline" onclick="openUrl('https://cn.tcymc.space/update/latest/')">🚀
+                            CN加速</button>
+                        <button class="btn small outline" onclick="openUrl('https://tcymc.space/update/latest/')">🌐
+                            全球</button>
+                    </div>
+                </div>
+                <div class="web-link-group">
+                    <div class="web-title">📜 历史更新记录</div>
+                    <div class="web-actions">
+                        <button class="btn small outline" onclick="openUrl('https://cn.tcymc.space/update/history/')">🚀
+                            CN加速</button>
+                        <button class="btn small outline" onclick="openUrl('https://tcymc.space/update/history/')">🌐
+                            全球</button>
+                    </div>
+                </div>
+                <div class="web-link-group">
+                    <div class="web-title">🏠 官网首页</div>
+                    <div class="web-actions">
+                        <button class="btn small outline" onclick="openUrl('https://cn.tcymc.space')">🚀 CN加速</button>
+                        <button class="btn small outline" onclick="openUrl('https://tcymc.space')">🌐 全球</button>
+                    </div>
+                </div>
+                <div class="web-link-group">
+                    <div class="web-title">📥 服务器文件下载</div>
+                    <div class="web-actions">
+                        <button class="btn small outline" onclick="openUrl('https://cn.tcymc.space/update/download/')">🚀
+                            CN加速</button>
+                        <button class="btn small outline" onclick="openUrl('https://tcymc.space/update/download/')">🌐
+                            全球</button>
+                    </div>
+                </div>
+
+                <div class="web-link-group">
+                    <div class="web-title">⭐ 本软件GitHub仓库 (点点Star~)</div>
+                    <div class="web-actions">
+                        <button class="btn small outline"
+                            onclick="openUrl('https://github.com/KanameMadoka520/TCY-Client-Updater')">🐱
+                            访问仓库</button>
+                    </div>
+                </div>
+                <div class="web-link-group">
+                    <div class="web-title">📂 本服更新文件公示仓库</div>
+                    <div class="web-actions">
+                        <button class="btn small outline"
+                            onclick="openUrl('https://github.com/KanameMadoka520/TCY-Server-Updates')">🐱
+                            访问仓库</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div id="page-settings" class="page">
+            <h1>个性化设置</h1>
+
+            <div class="card">
+                <h3 style="margin-top:0">网络设置</h3>
+                <div class="control-group">
+                    <span class="control-label">GitHub 镜像加速前缀 (CN通道)</span>
+                    <input type="text" id="mirror-prefix-input" placeholder="本软件默认为: https://gh-proxy.org/ 如果效果不好请找其他加速前缀"
+                        onchange="updateSettingsFromUI()">
+                    <div style="font-size:12px; margin-top:5px; opacity:0.7">
+                        用于加速 GitHub 文件下载。推荐前缀可访问：<a href="#" onclick="openUrl('https://gh-proxy.com/')"
+                            style="color:var(--accent-color)">gh-proxy.com</a>
+                    </div>
+                </div>
+            </div>
+
+            <div class="card">
+                <h3 style="margin-top:0">主题与配色</h3>
+
+                <div class="control-group">
+                    <span class="control-label">全局字体</span>
+                    <select id="font-select" onchange="updateSettingsFromUI()">
+                        <option value="'Segoe UI', system-ui, sans-serif">Segoe UI (系统默认)</option>
+                        <option value="'Microsoft YaHei', '微软雅黑', sans-serif">微软雅黑 (Microsoft YaHei)</option>
+                        <option value="'SimSun', '宋体', serif">宋体 (SimSun)</option>
+                        <option value="'Consolas', monospace">Consolas (等宽)</option>
+                        <option value="'Arial', sans-serif">Arial</option>
+                    </select>
+                </div>
+
+                <div class="control-group">
+                    <span class="control-label">主色调 (Accent Color)</span>
+                    <div style="display:flex; gap:10px; margin-top:5px">
+                        <div class="color-dot" style="background:#f59e0b"
+                            onclick="applyColorPreset('accent', '#f59e0b')"></div>
+                        <div class="color-dot" style="background:#3b82f6"
+                            onclick="applyColorPreset('accent', '#3b82f6')"></div>
+                        <div class="color-dot" style="background:#10b981"
+                            onclick="applyColorPreset('accent', '#10b981')"></div>
+                        <div class="color-dot" style="background:#8b5cf6"
+                            onclick="applyColorPreset('accent', '#8b5cf6')"></div>
+                        <div class="color-dot" style="background:#ef4444"
+                            onclick="applyColorPreset('accent', '#ef4444')"></div>
+                    </div>
+                </div>
+
+                <div class="control-group">
+                    <span class="control-label">文字颜色 (Global Text)</span>
+                    <div style="display:flex; gap:10px; margin-top:5px">
+                        <div class="color-dot" style="background:#333333" onclick="applyColorPreset('text', '#333333')">
+                        </div>
+                        <div class="color-dot" style="background:#000000" onclick="applyColorPreset('text', '#000000')">
+                        </div>
+                        <div class="color-dot" style="background:#1f2937" onclick="applyColorPreset('text', '#1f2937')">
+                        </div>
+                        <div class="color-dot" style="background:#ffffff; border:1px solid #ddd"
+                            onclick="applyColorPreset('text', '#ffffff')"></div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="card">
+                <h3 style="margin-top:0">窗口大小</h3>
+                <div class="control-group">
+                    <span class="control-label">逻辑分辨率预设</span>
+                    <select id="window-size-select" onchange="applyWindowSize(this.value)">
+                        <option value="950x600">默认 (950 x 600)</option>
+                        <option value="1280x720">720p - 标清 (1280 x 720)</option>
+                        <option value="1600x900">1600x900 (推荐 4K 屏幕使用)</option>
+                        <option value="1920x1080">1080p - 高清 (1920 x 1080)</option>
+                        <option value="2560x1440">2K - 超大 (注意：高分屏下可能占满全屏)</option>
+                    </select>
+                    <div style="font-size:12px; margin-top:5px; opacity:0.7">
+                        选择后窗口将立即调整大小，并作为下次启动的默认值。代码逻辑是： 用户选择的数值 (逻辑) × 系统缩放 (DPI) = 设置给 Windows 的数值 (物理分辨率)
+                    </div>
+                </div>
+            </div>
+
+            <div class="card">
+                <h3 style="margin-top:0">背景图片</h3>
+
+                <div class="control-group">
+                    <span class="control-label">图片来源</span>
+                    <div class="control-row">
+                        <button class="btn" onclick="selectBgImage()">选择图片</button>
+                        <button class="btn outline" onclick="restoreDefaultBg()">恢复默认图片</button>
+                        <button class="btn danger-outline" onclick="clearBg()">清除</button>
+                    </div>
+                </div>
+
+                <div class="control-group">
+                    <span class="control-label">显示模式</span>
+                    <select id="bg-mode-select" onchange="updateSettingsFromUI()">
+                        <option value="cover">填充 (Cover) - 推荐</option>
+                        <option value="contain">适应 (Contain) - 显示完整</option>
+                        <option value="100% 100%">拉伸 (Stretch) - 铺满全屏</option>
+                        <option value="auto">居中 (Center) - 原始大小</option>
+                    </select>
+                </div>
+            </div>
+
+            <div class="card">
+                <h3 style="margin-top:0">视觉效果</h3>
+                <div class="control-group">
+                    <span class="control-label">效果预设</span>
+                    <select id="visual-effect-select" onchange="applyVisualEffect(this.value, true)">
+                        <option value="glass">毛玻璃 (Glass) - 推荐</option>
+                        <option value="semi">半透明 (Semi)</option>
+                        <option value="transparent">全透明 (Transparent) - 极简</option>
+                        <option value="none">无效果 (Flat) - 纯色</option>
+                    </select>
+                </div>
+                <div class="control-group">
+                    <span class="control-label">遮罩透明度</span>
+                    <div class="control-row">
+                        <input type="range" id="mask-opacity-range" min="0" max="100" step="1"
+                            oninput="updateSettingsFromUI()">
+                        <span id="mask-opacity-val" style="width:40px; text-align:right">40%</span>
+                    </div>
+                </div>
+                <div class="control-group">
+                    <span class="control-label">背景模糊度</span>
+                    <div class="control-row">
+                        <input type="range" id="blur-radius-range" min="0" max="15" step="1"
+                            oninput="updateSettingsFromUI()">
+                        <span id="blur-radius-val" style="width:40px; text-align:right">0px</span>
+                    </div>
+                </div>
+            </div>
+
+            <div style="text-align:center; margin-bottom: 20px;">
+                <button class="btn outline" onclick="restoreDefaults()">⚠️ 恢复所有默认设置</button>
+            </div>
+        </div>
+    </div>
+
+    <div id="update-modal"
+        style="display:none; position:fixed; top:0; left:0; width:100%; height:100%; background:rgba(0,0,0,0.5); z-index:20000; align-items:center; justify-content:center; backdrop-filter: blur(5px);">
+        <div class="card"
+            style="width:480px; max-width:90%; background:var(--card-bg); backdrop-filter:blur(20px); border:1px solid rgba(255,255,255,0.5); box-shadow: 0 10px 25px rgba(0,0,0,0.2); max-height:85vh; display:flex; flex-direction:column;">
+            <h3 style="margin-top:0; display:flex; align-items:center; gap:10px; flex-shrink:0;">
+                <svg class="icon" viewBox="0 0 24 24" style="color:var(--accent-color)">
+                    <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+                    <polyline points="7 10 12 15 17 10"></polyline>
+                    <line x1="12" y1="15" x2="12" y2="3"></line>
+                </svg>
+                发现可用更新
+            </h3>
+
+            <div style="font-size:13px; opacity:0.8; margin-bottom:10px;">
+                检测到以下未安装版本，请选择需要更新的内容：
+            </div>
+
+            <div id="update-list-content" class="update-list-container">
+            </div>
+
+            <div id="progress-area" style="margin-bottom:20px; display:none; flex-shrink:0; margin-top:15px">
+                <div style="font-size:12px; margin-bottom:5px; display:flex; justify-content:space-between;">
+                    <span>下载与更新进度</span>
+                    <span id="dl-percent">0%</span>
+                </div>
+
+                <div style="height:6px; background:rgba(0,0,0,0.1); border-radius:3px; overflow:hidden; margin-bottom: 8px;">
+                    <div id="dl-bar" style="height:100%; width:0%; background:var(--accent-color); transition:width 0.2s;"></div>
+                </div>
+
+                <div
+                    style="display:flex; justify-content:space-between; font-size:11px; opacity:0.7; font-family: 'Segoe UI', sans-serif;">
+                    <span id="dl-status-text">准备中...</span>
+                    <span id="dl-speed-text" style="font-family:'Consolas', monospace;">0 KB/s</span>
+                </div>
+
+                <div style="margin-top:10px; text-align:right">
+                    <button class="btn small danger-outline" onclick="closeUpdateModal()">取消 / 关闭</button>
+                </div>
+            </div>
+
+            <div id="btn-area"
+                style="display:flex; gap:10px; justify-content:flex-end; flex-shrink:0; margin-top:10px;">
+                <button class="btn" onclick="triggerDownload('cn')">🚀 CN 加速更新</button>
+                <button class="btn outline" onclick="triggerDownload('global')">🌐 全球节点</button>
+                <button class="btn danger-outline" onclick="closeUpdateModal()">暂不更新</button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let currentSettings = { bg_type: 'default', custom_bg_data: '', visual_effect: 'glass', mask_opacity: 40, blur_radius: 0, text_color: '#333333', accent_color: '#f59e0b', bg_mode: 'cover', font_family: "'Segoe UI', system-ui, sans-serif", mirror_prefix: "https://gh-proxy.org/" };
+        let localVersion = "26.02.06.15.24";
+        let saveTimer;
+        let scrollTimer;
+        let pendingUpdates = [];
+
+        function initApp(data) {
+            // 1. 基础文本信息显示
+            document.getElementById('target-version-name').innerText = data.versionName;
+            if (data.localVersion) {
+                localVersion = data.localVersion;
+                document.getElementById('current-ver-display').innerText = localVersion;
+            }
+            if (data.launcherVersion) {
+                document.getElementById('launcher-ver-display').innerText = data.launcherVersion;
+            }
+
+            // 2. 将后端传来的设置合并到当前变量
+            currentSettings = { ...currentSettings, ...data.settings };
+
+            // 3. 设置背景图 (CSS变量)
+            const bgImg = data.bgImage ? `url('${data.bgImage}')` : 'none';
+            document.documentElement.style.setProperty('--bg-image', bgImg);
+
+            // ============================================================
+            // 🛠️ 关键修复：全量同步 UI 控件状态
+            // 必须在调用 updateSettingsFromUI() 之前完成，防止默认值覆盖配置
+            // ============================================================
+
+            // A. 修复下拉菜单 (Select) 的状态丢失
+            if (currentSettings.visual_effect) {
+                document.getElementById('visual-effect-select').value = currentSettings.visual_effect;
+            }
+            if (currentSettings.bg_mode) {
+                document.getElementById('bg-mode-select').value = currentSettings.bg_mode;
+            }
+            if (currentSettings.font_family) {
+                document.getElementById('font-select').value = currentSettings.font_family;
+            }
+
+            // B. 修复滑动条 (Range) 的数值错误 (之前提到的 50% 和 8px 问题)
+            // 注意：要检查值是否存在，因为旧版配置文件可能没有这些字段
+            if (currentSettings.mask_opacity !== undefined) {
+                document.getElementById('mask-opacity-range').value = currentSettings.mask_opacity;
+            }
+            if (currentSettings.blur_radius !== undefined) {
+                document.getElementById('blur-radius-range').value = currentSettings.blur_radius;
+            }
+
+            // C. 修复文本输入框 (Input) 的内容丢失
+            // 如果不填回去，updateSettingsFromUI 会读到空字符串，从而清空用户的加速源配置
+            if (currentSettings.mirror_prefix) {
+                document.getElementById('mirror-prefix-input').value = currentSettings.mirror_prefix;
+            }
+
+            // === 回显窗口大小 ===
+            if (currentSettings.window_size) {
+                const sizeSelect = document.getElementById('window-size-select');
+                if (sizeSelect) {
+                    sizeSelect.value = currentSettings.window_size;
+
+                    // 容错：如果配置文件里的尺寸不在下拉列表中（比如手动改了json），
+                    // 我们可以创建一个临时 option 或者仅仅保持默认。
+                    // 简单处理：如果 value 没变（说明没匹配到），就强制选回默认或者添加一个 option
+                    if (sizeSelect.value !== currentSettings.window_size) {
+                        // 这是一个高级优化，可选：如果不在列表中，手动添加一个“自定义”选项
+                        const opt = new Option(`自定义 (${currentSettings.window_size})`, currentSettings.window_size);
+                        sizeSelect.add(opt);
+                        sizeSelect.value = currentSettings.window_size;
+                    }
+                }
+            }
+
+            // ============================================================
+            // 4. UI 控件值已纠正，现在可以安全执行 UI 更新逻辑了
+            updateSettingsFromUI();
+
+            // 5. 路径检查与其他初始化
+            pywebview.api.check_path().then(valid => {
+                if (!valid) {
+                    document.getElementById('path-warning').style.display = 'flex';
+                    document.getElementById('path-success').style.display = 'none';
+                } else {
+                    document.getElementById('path-warning').style.display = 'none';
+                    if (data.detectedPath) {
+                        document.getElementById('detected-path-text').innerText = data.detectedPath;
+                        document.getElementById('path-success').style.display = 'flex';
+                    }
+                }
+            });
+
+            // 6. 刷新版本列表
+            refreshVersions();
+        }
+
+        // ... (windowControls, switchTab, updateSettingsFromUI 等保持不变) ...
+        function windowControls(action) {
+            if (action === 'min') pywebview.api.min_window();
+            else if (action === 'max') pywebview.api.max_window();
+            else if (action === 'close') pywebview.api.close_window();
+        }
+        function switchTab(tabId) {
+            document.querySelectorAll('.nav-item').forEach(el => el.classList.remove('active'));
+            document.querySelectorAll('.page').forEach(el => el.classList.remove('active'));
+            const targetNav = document.getElementById('nav-' + tabId);
+            if (targetNav) targetNav.classList.add('active');
+            const targetPage = document.getElementById('page-' + tabId);
+            if (targetPage) targetPage.classList.add('active');
+            if (tabId === 'mods' || tabId === 'config') loadFiles(tabId);
+        }
+        function applyWindowSize(val) {
+            if (!val) return;
+            const parts = val.split('x');
+            if (parts.length === 2) {
+                const w = parts[0];
+                const h = parts[1];
+
+                // 1. 调用后端调整大小
+                pywebview.api.set_window_size(w, h);
+
+                // 2. 更新内存中的 settings 变量，确保和其他设置同步
+                currentSettings.window_size = val;
+
+                // 3. 提示用户（可选）
+                // addLog(`窗口大小已调整为: ${w} x ${h}`);
+            }
+        }
+
+        function updateSettingsFromUI() {
+            const effect = document.getElementById('visual-effect-select').value;
+            const opacity = document.getElementById('mask-opacity-range').value;
+            const blur = document.getElementById('blur-radius-range').value;
+            const bgMode = document.getElementById('bg-mode-select').value;
+            const fontFamily = document.getElementById('font-select').value;
+            const mirrorPrefix = document.getElementById('mirror-prefix-input').value;
+
+            document.getElementById('mask-opacity-val').innerText = opacity + '%';
+            document.getElementById('blur-radius-val').innerText = blur + 'px';
+
+            const root = document.documentElement;
+            root.style.setProperty('--bg-blur', blur + 'px');
+            root.style.setProperty('--mask-opacity', opacity / 100);
+            root.style.setProperty('--bg-size', bgMode);
+            root.style.setProperty('--font-family', fontFamily);
+
+            root.style.setProperty('--text-color', currentSettings.text_color);
+            root.style.setProperty('--accent-color', currentSettings.accent_color);
+
+            document.querySelectorAll('.color-dot').forEach(dot => {
+                dot.classList.remove('active');
+                if (rgbToHex(dot.style.backgroundColor) === currentSettings.accent_color || rgbToHex(dot.style.backgroundColor) === currentSettings.text_color) {
+                    dot.classList.add('active');
+                }
+            });
+
+            const sidebar = document.querySelector('.sidebar');
+            const body = document.body;
+
+            sidebar.style.borderRight = '1px solid var(--border-color)';
+            root.style.setProperty('--card-border', '1px solid rgba(255, 255, 255, 0.4)');
+            root.style.setProperty('--text-shadow', 'none');
+            body.classList.remove('transparent-mode');
+
+            const winBtns = document.querySelectorAll('.win-btn');
+            winBtns.forEach(btn => btn.style.color = currentSettings.text_color);
+
+            // 处理 visual-effect 的逻辑
+            if (effect === 'none') {
+                sidebar.style.background = '#f9fafb';
+                sidebar.style.backdropFilter = 'none';
+                root.style.setProperty('--card-bg', '#ffffff');
+
+                // 关闭卡片模糊
+                root.style.setProperty('--card-blur', '0px');
+
+            } else if (effect === 'glass') {
+                sidebar.style.background = 'rgba(255,255,255,0.65)';
+                sidebar.style.backdropFilter = 'blur(20px)';
+                root.style.setProperty('--card-bg', 'rgba(255,255,255,0.65)');
+
+                // 开启卡片模糊 (只有 Glass 模式才开)
+                root.style.setProperty('--card-blur', '12px');
+
+            } else if (effect === 'semi') {
+                sidebar.style.background = 'rgba(255,255,255,0.9)';
+                sidebar.style.backdropFilter = 'none';
+                root.style.setProperty('--card-bg', 'rgba(255,255,255,0.9)');
+
+                // 半透明模式通常不需要模糊，保持清晰
+                root.style.setProperty('--card-blur', '0px');
+
+            } else if (effect === 'transparent') {
+                body.classList.add('transparent-mode');
+                sidebar.style.background = 'transparent';
+                sidebar.style.backdropFilter = 'none';
+                sidebar.style.borderRight = 'none';
+
+                // 透明模式：背景极淡，且绝对不能有模糊
+                root.style.setProperty('--card-bg', 'rgba(255,255,255,0.1)');
+                root.style.setProperty('--card-border', '1px solid rgba(255, 255, 255, 0.3)');
+                root.style.setProperty('--text-shadow', '0 0 3px rgba(255, 255, 255, 0.8), 0 0 5px rgba(255,255,255,0.5)');
+
+                // 彻底关闭模糊，实现全透明
+                root.style.setProperty('--card-blur', '0px');
+            }
+
+            currentSettings.visual_effect = effect;
+            currentSettings.mask_opacity = parseInt(opacity);
+            currentSettings.blur_radius = parseInt(blur);
+            currentSettings.bg_mode = bgMode;
+            currentSettings.font_family = fontFamily;
+            currentSettings.mirror_prefix = mirrorPrefix;
+
+            saveSettingsDebounced();
+        }
+        function saveSettingsDebounced() { clearTimeout(saveTimer); saveTimer = setTimeout(() => { pywebview.api.save_settings(JSON.stringify(currentSettings)); }, 500); }
+
+        function rgbToHex(rgb) {
+            if (rgb.startsWith('#')) return rgb;
+            const rgbValues = rgb.match(/\d+/g);
+            if (!rgbValues) return rgb;
+            return "#" + ((1 << 24) + (parseInt(rgbValues[0]) << 16) + (parseInt(rgbValues[1]) << 8) + parseInt(rgbValues[2])).toString(16).slice(1);
+        }
+
+        function applyColorPreset(type, color) {
+            if (type === 'accent') {
+                currentSettings.accent_color = color;
+            } else if (type === 'text') {
+                currentSettings.text_color = color;
+            }
+            updateSettingsFromUI();
+        }
+
+        function applyVisualEffect(val, userTriggered) {
+            if (userTriggered) {
+                if (val === 'glass') {
+                    document.getElementById('mask-opacity-range').value = 40;
+                    document.getElementById('blur-radius-range').value = 0;
+                } else if (val === 'transparent') {
+                    document.getElementById('mask-opacity-range').value = 10;
+                }
+            }
+            updateSettingsFromUI();
+        }
+
+        function restoreDefaults() {
+            if (confirm("确定要恢复所有界面设置到默认状态吗？")) {
+                currentSettings = {
+                    bg_type: 'default', custom_bg_data: '',
+                    visual_effect: 'glass', mask_opacity: 40, blur_radius: 0,
+                    text_color: '#333333', accent_color: '#f59e0b',
+                    bg_mode: 'cover', font_family: "'Segoe UI', system-ui, sans-serif",
+                    current_version: localVersion,
+                    mirror_prefix: "https://gh-proxy.org/"
+                };
+                document.getElementById('visual-effect-select').value = 'glass';
+                document.getElementById('mask-opacity-range').value = 40;
+                document.getElementById('blur-radius-range').value = 0;
+                document.getElementById('bg-mode-select').value = 'cover';
+                document.getElementById('font-select').value = "'Segoe UI', system-ui, sans-serif";
+                document.getElementById('mirror-prefix-input').value = "https://gh-proxy.org/";
+                restoreDefaultBg();
+                updateSettingsFromUI();
+            }
+        }
+
+        /**
+                 * 🖼️ 选择自定义背景图片
+                 * 调用后端文件选择弹窗，并将选中的图片转换为 Base64 应用到界面
+                 */
+        function selectBgImage() {
+            // 调用 Python 后端接口弹出文件选择框
+            pywebview.api.select_custom_image().then(b64 => {
+                // 如果 b64 有值（说明用户选中了图片，没有点取消）
+                if (b64) {
+                    // 1. 更新当前内存中的设置对象
+                    currentSettings.bg_type = 'custom';      // 标记类型为自定义
+                    currentSettings.custom_bg_data = b64;    // 保存 Base64 数据
+
+                    // 2. 实时更新 CSS 变量，让背景立即生效
+                    document.documentElement.style.setProperty('--bg-image', `url('${b64}')`);
+
+                    // 3. 触发防抖保存（写入 json 文件）
+                    saveSettingsDebounced();
+                }
+            });
+        }
+
+        /**
+         * 🔙 恢复默认背景
+         * 从后端获取默认的背景图片数据并应用
+         */
+        function restoreDefaultBg() {
+            // 请求后端获取默认图片的 Base64 数据
+            pywebview.api.get_default_bg().then(b64 => {
+                // 1. 更新设置状态
+                currentSettings.bg_type = 'default';
+
+                // 2. 更新 CSS 变量
+                document.documentElement.style.setProperty('--bg-image', `url('${b64}')`);
+
+                // 3. 保存设置
+                saveSettingsDebounced();
+            });
+        }
+
+        /**
+         * 🗑️ 清除背景
+         * 移除所有背景图片，显示纯色或透明
+         */
+        function clearBg() {
+            // 1. 更新设置状态为 'none'
+            currentSettings.bg_type = 'none';
+            // 2. 将 CSS 变量设为 none
+            document.documentElement.style.setProperty('--bg-image', 'none');
+            // 3. 保存设置
+            saveSettingsDebounced();
+        }
+
+        // ===文件列表缓存，用于前端搜索 ===
+        let filesCache = { mods: [], config: [] };
+
+        function loadFiles(type) {
+            // 加载前先清空搜索框，避免逻辑混乱
+            const searchInput = document.getElementById('search-' + type);
+            if (searchInput) searchInput.value = '';
+
+            const container = document.getElementById(type + '-list');
+            container.innerHTML = '<div style="color:#666;text-align:center;padding:20px;">正在加载文件列表...您真的把更新器放对地方了吗</div>';
+
+            pywebview.api.list_files(type).then(items => {
+                // 1. 存入缓存
+                filesCache[type] = items;
+                // 2. 渲染全量列表
+                renderFileList(type, items);
+            });
+        }
+
+        // ===独立的渲染函数 (支持搜索结果渲染) ===
+        function renderFileList(type, items, isSearchMode = false) {
+            const container = document.getElementById(type + '-list');
+            container.innerHTML = '';
+
+            if (!items || items.length === 0) {
+                container.innerHTML = '<div style="color:#666;text-align:center;padding:20px;">暂无文件 (未找到匹配项)</div>';
+                return;
+            }
+
+            // 递归渲染函数
+            function render(node, parent) {
+                node.forEach(item => {
+                    const div = document.createElement('div');
+
+                    if (item.type === 'folder') {
+                        div.className = 'folder-item';
+                        // 如果是搜索模式，默认展开文件夹，方便查看结果
+                        if (isSearchMode) div.classList.add('open');
+
+                        const icon = '<svg class="icon" style="width:14px;height:14px;margin-right:5px;fill:#fbbf24;stroke:none" viewBox="0 0 24 24"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path></svg>';
+
+                        div.innerHTML = `<div class="folder-header" onclick="this.parentElement.classList.toggle('open')">${icon} ${item.name}</div><div class="folder-content"></div>`;
+
+                        // 递归渲染子节点
+                        render(item.children, div.querySelector('.folder-content'));
+                    } else {
+                        div.className = 'file-item';
+                        const dbClickAttr = (type === 'config') ? `ondblclick="pywebview.api.open_file('${type}', '${item.path.replace(/\\/g, '\\\\')}')" title="双击即可打开文件"` : '';
+
+                        // 高亮搜索关键字 (可选优化)
+                        let displayName = item.name;
+
+                        let html = `<div style="display:flex;align-items:center;gap:10px;flex:1" ${dbClickAttr}>
+                                            <span>${displayName}</span>
+                                            <span style="opacity:0.6;font-size:12px">${item.size}</span>
+                                        </div>`;
+
+                        if (type === 'mods') {
+                            html += `<button class="btn danger-outline small" onclick="deleteFile('${type}', '${item.path.replace(/\\/g, '\\\\')}', '${item.name}')">删除</button>`;
+                        }
+                        div.innerHTML = html;
+                    }
+                    parent.appendChild(div);
+                });
+            }
+
+            render(items, container);
+        }
+
+        // ===搜索过滤函数 (支持正则) ===
+        function filterFiles(type, query) {
+            const rawData = filesCache[type];
+            if (!query) {
+                renderFileList(type, rawData, false);
+                return;
+            }
+
+            try {
+                // 创建正则对象，'i' 表示忽略大小写
+                const regex = new RegExp(query, 'i');
+                const filteredData = filterTreeData(rawData, regex);
+                renderFileList(type, filteredData, true); // true 表示开启搜索模式(自动展开文件夹)
+            } catch (e) {
+                // 如果正则语法错误(比如输入了单个'[')，暂时不处理或显示错误
+                // console.warn("Invalid Regex", e);
+            }
+        }
+
+        // ===递归过滤树形结构数据 ===
+        function filterTreeData(nodes, regex) {
+            let result = [];
+            for (let node of nodes) {
+                if (node.type === 'folder') {
+                    // 先递归过滤子节点
+                    let matchingChildren = filterTreeData(node.children, regex);
+
+                    // 逻辑：如果文件夹名字匹配，或者它里面有匹配的文件，就保留这个文件夹
+                    if (regex.test(node.name) || matchingChildren.length > 0) {
+                        // 浅拷贝节点，避免修改原始缓存数据
+                        let newNode = { ...node, children: matchingChildren };
+                        result.push(newNode);
+                    }
+                } else {
+                    // 如果是文件，直接测名字
+                    if (regex.test(node.name)) {
+                        result.push(node);
+                    }
+                }
+            }
+            return result;
+        }
+
+        function deleteFile(type, path, name) {
+            if (confirm(`二级确认：您确定要永久删除 “${name}” 吗？\n此操作不可撤销！`)) {
+                pywebview.api.delete_file(type, path).then(success => {
+                    if (success) {
+                        // 删除成功后重新加载，刷新缓存
+                        loadFiles(type);
+                    } else {
+                        alert('删除失败，可能文件被占用或权限不足。');
+                    }
+                });
+            }
+        }
+
+        function openShortcut(type) { pywebview.api.open_shortcut_folder(type); }
+        function openUrl(url) { pywebview.api.open_url(url); }
+        function addLog(msg) { const box = document.getElementById('log-container'); box.innerHTML += `<div>${msg}</div>`; box.scrollTop = box.scrollHeight; }
+        function refreshVersions() { pywebview.api.scan_versions().then(vs => { const sel = document.getElementById('version-select'); sel.innerHTML = ''; vs.forEach(v => sel.add(new Option(v, v))); }); }
+        function startUpdate() { const v = document.getElementById('version-select').value; if (v && confirm('确定更新？')) pywebview.api.run_update(v); }
+
+        // === [核心逻辑重写] 渲染更新列表 ===
+        function showUpdateListModal(updates) {
+            pendingUpdates = updates; // 存储后端发来的完整队列
+            const container = document.getElementById('update-list-content');
+            container.innerHTML = '';
+
+            updates.forEach((item, index) => {
+                const isOptional = item.opt_update === true;
+                const div = document.createElement('div');
+                div.className = `update-item ${isOptional ? 'optional' : 'mandatory'}`;
+
+                let checkHtml = '';
+                if (isOptional) {
+                    // 可选更新：显示复选框 (默认勾选)
+                    checkHtml = `<input type="checkbox" class="update-checkbox" data-index="${index}" checked>`;
+                } else {
+                    // 强制更新：显示空占位或锁定图标
+                    checkHtml = `<div style="width:18px; text-align:center; color:#ef4444; font-weight:bold;">!</div>`;
+                }
+
+                div.innerHTML = `
+                    ${checkHtml}
+                    <div class="update-content">
+                        <div class="update-header">
+                            <span>${item.version} <small style="font-weight:normal; opacity:0.6">${item.date || ''}</small></span>
+                            <span class="update-badge ${isOptional ? 'badge-opt' : 'badge-req'}">${isOptional ? '可选' : '必选'}</span>
+                        </div>
+                        <div class="update-body">${item.desc}</div>
+                    </div>
+                `;
+                container.appendChild(div);
+            });
+
+            resetUpdateModalState();
+            document.getElementById('update-modal').style.display = 'flex';
+        }
+
+        function closeUpdateModal() {
+            document.getElementById('update-modal').style.display = 'none';
+        }
+
+        function resetUpdateModalState() {
+            document.getElementById('progress-area').style.display = 'none';
+            document.getElementById('btn-area').style.display = 'flex';
+            document.getElementById('dl-bar').style.width = '0%';
+            document.getElementById('dl-percent').innerText = '0%';
+        }
+
+        function triggerDownload(source) {
+            if (!pendingUpdates || pendingUpdates.length === 0) return;
+
+            // 1. 收集用户选中的更新
+            const finalSelection = [];
+            const checkboxes = document.querySelectorAll('.update-checkbox');
+
+            // 遍历原始队列，匹配复选框状态
+            pendingUpdates.forEach((item, index) => {
+                const isOptional = item.opt_update === true;
+                let isSelected = true;
+
+                if (isOptional) {
+                    // 查找对应的复选框
+                    const chk = document.querySelector(`.update-checkbox[data-index="${index}"]`);
+                    if (chk && !chk.checked) {
+                        isSelected = false;
+                        // 2. 没选中的，调用后端记录为 skipped
+                        pywebview.api.add_skipped_version(item.version);
+                    }
+                }
+
+                if (isSelected) {
+                    finalSelection.push(item);
+                }
+            });
+
+            if (finalSelection.length === 0) {
+                alert("未选择任何更新！");
+                closeUpdateModal();
+                return;
+            }
+
+            // 切换 UI 到下载状态
+            document.getElementById('btn-area').style.display = 'none';
+            document.getElementById('progress-area').style.display = 'block';
+
+            // 发送批量更新请求
+            pywebview.api.start_update_sequence(JSON.stringify(finalSelection), source);
+        }
+
+        function updateDownloadProgress(percent) {
+            document.getElementById('dl-bar').style.width = percent + '%';
+            document.getElementById('dl-percent').innerText = percent + '%';
+        }
+
+        // === [新增] 更新详细进度信息 (速度 + 状态 + 百分比) ===
+        function updateProgressDetails(percent, speed, status) {
+            // 更新进度条
+            document.getElementById('dl-bar').style.width = percent + '%';
+            document.getElementById('dl-percent').innerText = percent + '%';
+
+            // 更新速度
+            if (speed) {
+                document.getElementById('dl-speed-text').innerText = speed;
+            }
+
+            // 更新状态文本 (例如: "正在下载 (3/10): xxx.jar")
+            if (status) {
+                document.getElementById('dl-status-text').innerText = status;
+            }
+        }
+
+        // === [新增] 启动时的目录位置强校验 ===
+        function verifyInstallationPath() {
+            // 调用我们刚才在 Python 里写的接口
+            pywebview.api.check_game_directory_exists().then(isValid => {
+                if (isValid) {
+                    // ✅ 情况A：目录校验通过
+                    // 通知 Python 前端已就绪，Python 随后会调用 initApp 加载数据
+                    pywebview.api.mark_ready();
+                } else {
+                    // ❌ 情况B：目录校验失败，弹窗阻断
+                    var userChoice = confirm(
+                        "⚠️ 目录结构校验失败！\n\n" +
+                        "程序未检测到以下路径：\n" +
+                        "⛔ .minecraft\\versions\\异界战斗幻想\n\n" +
+                        "请检查：\n" +
+                        "1. 本更新器是否放在了和 [.minecraft] 文件夹同级的目录？\n" +
+                        "   (即和 HMCL.exe 在一起)\n" +
+                        "2. 您的整合包是否完整？\n\n" +
+                        "• 点击【确定】强制启动（功能可能异常）。\n" +
+                        "• 点击【取消】退出程序。"
+                    );
+
+                    if (userChoice) {
+                        // 用户点击确定 -> 强制通知 Python 就绪
+                        pywebview.api.mark_ready();
+                    } else {
+                        // 用户点击取消 -> 直接关闭窗口
+                        pywebview.api.close_window();
+                    }
+                }
+            });
+        }
+
+         // === 动态粒子背景系统 ===
+        (function initParticles() {
+            const canvas = document.getElementById('particle-canvas');
+            const ctx = canvas.getContext('2d');
+            let width, height;
+            let particles = [];
+
+            // 从 CSS 变量获取主题色，让粒子颜色跟随主题变化
+            function getAccentColor() {
+                const style = getComputedStyle(document.documentElement);
+                const color = style.getPropertyValue('--accent-color').trim();
+                return color || '#f59e0b';
+            }
+
+            // 粒子类
+            class Particle {
+                constructor() {
+                    this.reset();
+                }
+
+                reset() {
+                    this.x = Math.random() * width;
+                    this.y = Math.random() * height;
+                    // 随机大小：模拟远近感
+                    this.size = Math.random() * 2 + 0.5;
+                    // 极慢的速度，营造漂浮感
+                    this.speedX = (Math.random() - 0.5) * 0.4;
+                    this.speedY = (Math.random() - 0.5) * 0.4;
+                    this.opacity = Math.random() * 0.5 + 0.1;
+                    this.life = Math.random() * 100; // 闪烁周期
+                }
+
+                update() {
+                    this.x += this.speedX;
+                    this.y += this.speedY;
+                    this.life += 1;
+
+                    // 边界检查：超出屏幕后从对面飞回
+                    if (this.x > width) this.x = 0;
+                    if (this.x < 0) this.x = width;
+                    if (this.y > height) this.y = 0;
+                    if (this.y < 0) this.y = height;
+
+                    // 呼吸闪烁效果
+                    this.currentOpacity = this.opacity + Math.sin(this.life * 0.05) * 0.1;
+                }
+
+                draw() {
+                    ctx.beginPath();
+                    ctx.arc(this.x, this.y, this.size, 0, Math.PI * 2);
+                    ctx.fillStyle = getAccentColor(); // 实时获取主题色
+                    ctx.globalAlpha = Math.max(0, this.currentOpacity);
+                    ctx.fill();
+                    ctx.globalAlpha = 1;
+                }
+            }
+
+            function resize() {
+                width = canvas.width = window.innerWidth;
+                height = canvas.height = window.innerHeight;
+            }
+
+            function init() {
+                resize();
+                // 创建 60 个粒子
+                for (let i = 0; i < 60; i++) {
+                    particles.push(new Particle());
+                }
+                animate();
+            }
+
+            function animate() {
+                ctx.clearRect(0, 0, width, height);
+                particles.forEach(p => {
+                    p.update();
+                    p.draw();
+                });
+                requestAnimationFrame(animate);
+            }
+
+            window.addEventListener('resize', resize);
+
+            // 延迟启动，确保 CSS 变量已加载
+            setTimeout(init, 500);
+        })();
+
+    //  结尾的事件监听代码
+        window.addEventListener('new_log', e => addLog(e.detail));
+
+        // 修改为：准备好后，先去执行 verifyInstallationPath 检查，通过了再 mark_ready
+        window.addEventListener('pywebviewready', verifyInstallationPath);
+    </script>
+</body>
+
+</html>
