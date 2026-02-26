@@ -1098,8 +1098,7 @@
             </div>
 
             <div class="card">
-                <h3
-                    style="margin-top:0; font-size:16px; display:flex; justify-content:space-between; align-items:center;">
+                <h3 style="margin-top:0; font-size:16px; display:flex; justify-content:space-between; align-items:center;">
                     在线更新
                     <button class="btn small" onclick="pywebview.api.check_online_update()">
                         <svg class="icon" viewBox="0 0 24 24">
@@ -1107,7 +1106,7 @@
                             <path d="M1 20v-6h6"></path>
                             <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"></path>
                         </svg>
-                        检查更新
+                        检查更新-点击后请稍等结果
                     </button>
                 </h3>
                 <div style="font-size:12px; opacity:0.8; margin-top:5px;">
@@ -1115,6 +1114,25 @@
                         style="font-weight:bold; color:var(--accent-color)">Loading...</span>
                     <span style="margin: 0 10px; opacity:0.3">|</span>
                     更新器版本：<span id="launcher-ver-display" style="font-weight:bold;">Loading...</span>
+                </div>
+                <div style="font-size:11px; opacity:0.55; margin-top:6px; line-height:1.6;">
+                    启动时会自动轮询官网及 GitHub 备用地址（含加速前缀）获取版本信息，所有地址均会检查并返回结果。
+                </div>
+
+                <div style="margin-top:14px; padding-top:12px; border-top:1px solid var(--border-color);">
+                    <div style="display:flex; align-items:flex-start; gap:12px;">
+                        <button class="btn small danger-outline" style="flex-shrink:0;" onclick="pywebview.api.get_all_history()" title="强制重新应用某一次历史更新，无需手动修改版本号">
+                            <svg class="icon" viewBox="0 0 24 24">
+                                <path d="M23 4v6h-6"></path><path d="M1 20v-6h6"></path>
+                                <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"></path>
+                            </svg>
+                            强制拉取历史版本
+                        </button>
+                        <div style="font-size:11px; opacity:0.6; line-height:1.6;">
+                            用于你明确知道操作目的、想要强制重新应用某一次历史更新的情况。<br>
+                            无需手动修改 <code>launcher_settings.json</code> 中的版本号，从列表选择目标版本后点击更新即可。
+                        </div>
+                    </div>
                 </div>
             </div>
 
@@ -1355,6 +1373,55 @@
                 </div>
             </div>
 
+            <!-- === 自定义更新源设置 === -->
+            <div class="card">
+                <h3 style="margin-top:0; display:flex; justify-content:space-between; align-items:center;">
+                    自定义更新源
+                    <button class="btn small outline" onclick="restoreDefaultUpdateUrls()">恢复默认更新源</button>
+                </h3>
+                <div class="alert-info" style="margin-bottom:15px; font-size:12px;">
+                    <svg class="icon" style="width:18px; height:18px; flex-shrink:0;" viewBox="0 0 24 24">
+                        <circle cx="12" cy="12" r="10"></circle>
+                        <line x1="12" y1="16" x2="12" y2="12"></line>
+                        <line x1="12" y1="8" x2="12.01" y2="8"></line>
+                    </svg>
+                    程序启动时会对以下所有地址逐一检查，收集每个地址的连接结果后统一展示。<br>
+                    只要有一个地址能拉取到信息就是正常的，否则联系糖醋鱼。
+                </div>
+
+                <div style="margin-bottom:14px;">
+                    <div style="font-size:12px; font-weight:bold; margin-bottom:6px; opacity:0.8;">客户端版本 JSON (latest.json) 轮询地址：</div>
+                    <div id="latest-url-list" style="font-size:11px; font-family:'Consolas',monospace; background:rgba(0,0,0,0.04); border-radius:6px; padding:8px 10px; line-height:2;">
+                        <div style="opacity:0.5;">（加载中...）</div>
+                    </div>
+                </div>
+                <div style="margin-bottom:14px;">
+                    <div style="font-size:12px; font-weight:bold; margin-bottom:6px; opacity:0.8;">更新器版本 JSON (Updater-latest.json) 轮询地址：</div>
+                    <div id="updater-url-list" style="font-size:11px; font-family:'Consolas',monospace; background:rgba(0,0,0,0.04); border-radius:6px; padding:8px 10px; line-height:2;">
+                        <div style="opacity:0.5;">（加载中...）</div>
+                    </div>
+                </div>
+
+                <div class="control-group">
+                    <span class="control-label">自定义客户端版本 JSON 地址 (latest.json)</span>
+                    <input type="text" id="custom-latest-url-input"
+                        placeholder="默认: https://tcymc.space/update/latest.json"
+                        onchange="updateSettingsFromUI(); refreshUrlLists()">
+                    <div style="font-size:12px; margin-top:5px; opacity:0.7">
+                        填写后将作为最高优先级地址插入轮询列表首位。留空则使用默认地址。
+                    </div>
+                </div>
+                <div class="control-group">
+                    <span class="control-label">自定义更新器版本 JSON 地址 (Updater-latest.json)</span>
+                    <input type="text" id="custom-updater-url-input"
+                        placeholder="默认: https://tcymc.space/update/Updater-latest.json"
+                        onchange="updateSettingsFromUI(); refreshUrlLists()">
+                    <div style="font-size:12px; margin-top:5px; opacity:0.7">
+                        填写后将作为最高优先级地址插入轮询列表首位。留空则使用默认地址。
+                    </div>
+                </div>
+            </div>
+
             <div class="card">
                 <h3 style="margin-top:0">主题与配色</h3>
 
@@ -1405,7 +1472,7 @@
                 <div class="control-group">
                     <span class="control-label">逻辑分辨率预设</span>
                     <select id="window-size-select" onchange="applyWindowSize(this.value)">
-                        <option value="950x600">默认 (950 x 600)</option>
+                        <option value="950x700">默认 (950 x 700)</option>
                         <option value="1280x720">720p - 标清 (1280 x 720)</option>
                         <option value="1600x900">1600x900 (推荐 4K 屏幕使用)</option>
                         <option value="1920x1080">1080p - 高清 (1920 x 1080)</option>
@@ -1475,24 +1542,44 @@
         </div>
     </div>
 
+    <!-- 版本信息综合弹窗 -->
     <div id="update-modal"
         style="display:none; position:fixed; top:0; left:0; width:100%; height:100%; background:rgba(0,0,0,0.5); z-index:20000; align-items:center; justify-content:center; backdrop-filter: blur(5px);">
         <div class="card"
-            style="width:480px; max-width:90%; background:var(--card-bg); backdrop-filter:blur(20px); border:1px solid rgba(255,255,255,0.5); box-shadow: 0 10px 25px rgba(0,0,0,0.2); max-height:85vh; display:flex; flex-direction:column;">
+            style="width:520px; max-width:92%; background:var(--card-bg); backdrop-filter:blur(20px); border:1px solid rgba(255,255,255,0.5); box-shadow: 0 10px 25px rgba(0,0,0,0.2); max-height:88vh; display:flex; flex-direction:column;">
             <h3 style="margin-top:0; display:flex; align-items:center; gap:10px; flex-shrink:0;">
                 <svg class="icon" viewBox="0 0 24 24" style="color:var(--accent-color)">
                     <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
                     <polyline points="7 10 12 15 17 10"></polyline>
                     <line x1="12" y1="15" x2="12" y2="3"></line>
                 </svg>
-                发现可用更新
+                版本信息
             </h3>
 
-            <div style="font-size:13px; opacity:0.8; margin-bottom:10px;">
+            <!-- 获取来源提示 -->
+            <div id="fetch-warn-area" style="display:none; font-size:12px; background:rgba(245,158,11,0.12); border:1px solid rgba(245,158,11,0.4); border-radius:8px; padding:8px 12px; margin-bottom:10px; white-space:pre-line; flex-shrink:0;"></div>
+
+            <!-- 更新器版本信息区 -->
+            <div id="updater-info-area" style="display:none; flex-shrink:0; margin-bottom:10px; padding:10px 12px; background:rgba(59,130,246,0.08); border:1px solid rgba(59,130,246,0.3); border-radius:8px;">
+                <div style="font-size:13px; font-weight:bold; margin-bottom:4px; color:#3b82f6;">🔧 更新器有新版本</div>
+                <div id="updater-info-text" style="font-size:12px; opacity:0.85;"></div>
+                <div style="margin-top:8px; display:flex; gap:8px;">
+                    <button class="btn small" onclick="doUpdaterSelfUpdate()">立即更新更新器</button>
+                    <button class="btn small outline" onclick="dismissUpdaterInfo()">暂不更新</button>
+                </div>
+            </div>
+
+            <!-- 客户端版本信息区 -->
+            <div style="font-size:12px; opacity:0.7; margin-bottom:6px; flex-shrink:0;">
+                当前客户端版本：<strong id="modal-local-ver"></strong>
+                &nbsp;|&nbsp;更新器版本：<strong id="modal-launcher-ver"></strong>
+            </div>
+
+            <div id="update-subtitle" style="font-size:13px; opacity:0.8; margin-bottom:10px; flex-shrink:0;">
                 检测到以下未安装版本，请选择需要更新的内容：
             </div>
 
-            <div id="update-list-content" class="update-list-container">
+            <div id="update-list-content" class="update-list-container" style="overflow-y:auto; flex:1; min-height:0;">
             </div>
 
             <div id="progress-area" style="margin-bottom:20px; display:none; flex-shrink:0; margin-top:15px">
@@ -1500,24 +1587,20 @@
                     <span>下载与更新进度</span>
                     <span id="dl-percent">0%</span>
                 </div>
-
                 <div style="height:6px; background:rgba(0,0,0,0.1); border-radius:3px; overflow:hidden; margin-bottom: 8px;">
                     <div id="dl-bar" style="height:100%; width:0%; background:var(--accent-color); transition:width 0.2s;"></div>
                 </div>
-
-                <div
-                    style="display:flex; justify-content:space-between; font-size:11px; opacity:0.7; font-family: 'Segoe UI', sans-serif;">
+                <div style="display:flex; justify-content:space-between; font-size:11px; opacity:0.7; font-family: 'Segoe UI', sans-serif;">
                     <span id="dl-status-text">准备中...</span>
                     <span id="dl-speed-text" style="font-family:'Consolas', monospace;">0 KB/s</span>
                 </div>
-
                 <div style="margin-top:10px; text-align:right">
                     <button class="btn small danger-outline" onclick="closeUpdateModal()">取消 / 关闭</button>
                 </div>
             </div>
 
             <div id="btn-area"
-                style="display:flex; gap:10px; justify-content:flex-end; flex-shrink:0; margin-top:10px;">
+                style="display:flex; gap:10px; justify-content:flex-end; flex-shrink:0; margin-top:10px; flex-wrap:wrap;">
                 <button class="btn" onclick="triggerDownload('cn')">🚀 CN 加速更新</button>
                 <button class="btn outline" onclick="triggerDownload('global')">🌐 全球节点</button>
                 <button class="btn danger-outline" onclick="closeUpdateModal()">暂不更新</button>
@@ -1525,8 +1608,68 @@
         </div>
     </div>
 
+    <!-- 强制拉取历史版本弹窗 -->
+    <div id="force-update-modal"
+        style="display:none; position:fixed; top:0; left:0; width:100%; height:100%; background:rgba(0,0,0,0.55); z-index:20001; align-items:center; justify-content:center; backdrop-filter: blur(5px);">
+        <div class="card"
+            style="width:520px; max-width:92%; background:var(--card-bg); backdrop-filter:blur(20px); border:1px solid rgba(255,255,255,0.5); box-shadow: 0 10px 25px rgba(0,0,0,0.2); max-height:88vh; display:flex; flex-direction:column;">
+            <h3 style="margin-top:0; display:flex; align-items:center; gap:10px; flex-shrink:0; color:#ef4444;">
+                <svg class="icon" viewBox="0 0 24 24" style="color:#ef4444">
+                    <path d="M23 4v6h-6"></path><path d="M1 20v-6h6"></path>
+                    <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"></path>
+                </svg>
+                强制拉取历史版本更新
+            </h3>
+            <div style="font-size:12px; background:rgba(239,68,68,0.08); border:1px solid rgba(239,68,68,0.3); border-radius:8px; padding:8px 12px; margin-bottom:12px; flex-shrink:0; line-height:1.6;">
+                <strong>功能说明：</strong>用于你明确知道操作目的，想要强制重新应用某一次历史更新的情况。<br>
+                这样就不用手动修改时间戳版本号来实现还原。<br>
+                <strong>⚠️ 注意：</strong>强制拉取时会忽略当前版本号，直接应用所选版本的更新规则。<br>
+                请从下方列表中选择一个版本，然后点击更新按钮。
+            </div>
+            <div style="font-size:13px; opacity:0.8; margin-bottom:8px; flex-shrink:0;">选择要强制重新应用的版本：</div>
+            <div id="force-update-list" class="update-list-container" style="overflow-y:auto; flex:1; min-height:0;">
+            </div>
+            <div id="force-progress-area" style="margin-bottom:20px; display:none; flex-shrink:0; margin-top:15px">
+                <div style="font-size:12px; margin-bottom:5px; display:flex; justify-content:space-between;">
+                    <span>强制更新进度</span>
+                    <span id="force-dl-percent">0%</span>
+                </div>
+                <div style="height:6px; background:rgba(0,0,0,0.1); border-radius:3px; overflow:hidden; margin-bottom: 8px;">
+                    <div id="force-dl-bar" style="height:100%; width:0%; background:#ef4444; transition:width 0.2s;"></div>
+                </div>
+                <div style="display:flex; justify-content:space-between; font-size:11px; opacity:0.7;">
+                    <span id="force-dl-status">准备中...</span>
+                    <span id="force-dl-speed" style="font-family:'Consolas', monospace;">0 KB/s</span>
+                </div>
+            </div>
+            <div id="force-btn-area"
+                style="display:flex; gap:10px; justify-content:flex-end; flex-shrink:0; margin-top:10px; flex-wrap:wrap;">
+                <button class="btn" style="background:#ef4444; border-color:#ef4444;" onclick="triggerForceDownload('cn')">🚀 CN 加速强制更新</button>
+                <button class="btn outline" onclick="triggerForceDownload('global')">🌐 全球节点</button>
+                <button class="btn danger-outline" onclick="closeForceUpdateModal()">取消</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- 连接检查结果弹窗 -->
+    <div id="fetch-result-modal"
+        style="display:none; position:fixed; top:0; left:0; width:100%; height:100%; background:rgba(0,0,0,0.55); z-index:20002; align-items:center; justify-content:center; backdrop-filter: blur(5px);">
+        <div class="card"
+            style="width:560px; max-width:92%; background:var(--card-bg); backdrop-filter:blur(20px); border:1px solid rgba(255,255,255,0.5); box-shadow: 0 10px 25px rgba(0,0,0,0.2); max-height:85vh; display:flex; flex-direction:column; padding:20px;">
+            <h3 style="margin-top:0; display:flex; align-items:center; gap:10px; flex-shrink:0;">
+                <svg class="icon" viewBox="0 0 24 24" style="color:var(--accent-color)">
+                    <path d="M1 6l10.5 7.5L22 6"></path>
+                    <rect x="1" y="4" width="22" height="16" rx="2" ry="2"></rect>
+                </svg>
+                版本信息获取结果
+            </h3>
+            <div id="fetch-result-content" style="overflow-y:auto; flex:1; min-height:0;">
+            </div>
+        </div>
+    </div>
+
     <script>
-        let currentSettings = { bg_type: 'default', custom_bg_data: '', visual_effect: 'glass', mask_opacity: 40, blur_radius: 0, text_color: '#333333', accent_color: '#f59e0b', bg_mode: 'cover', font_family: "'Segoe UI', system-ui, sans-serif", mirror_prefix: "https://gh-proxy.org/" };
+        let currentSettings = { bg_type: 'default', custom_bg_data: '', visual_effect: 'glass', mask_opacity: 40, blur_radius: 0, text_color: '#333333', accent_color: '#f59e0b', bg_mode: 'cover', font_family: "'Segoe UI', system-ui, sans-serif", mirror_prefix: "https://gh-proxy.org/", custom_latest_url: "", custom_updater_url: "" };
         let localVersion = "26.02.06.15.24";
         let saveTimer;
         let scrollTimer;
@@ -1581,6 +1724,14 @@
                 document.getElementById('mirror-prefix-input').value = currentSettings.mirror_prefix;
             }
 
+            // D. 回显自定义更新源 URL 输入框
+            if (currentSettings.custom_latest_url) {
+                document.getElementById('custom-latest-url-input').value = currentSettings.custom_latest_url;
+            }
+            if (currentSettings.custom_updater_url) {
+                document.getElementById('custom-updater-url-input').value = currentSettings.custom_updater_url;
+            }
+
             // === 回显窗口大小 ===
             if (currentSettings.window_size) {
                 const sizeSelect = document.getElementById('window-size-select');
@@ -1619,6 +1770,9 @@
 
             // 6. 刷新版本列表
             refreshVersions();
+
+            // 7. 渲染轮询地址列表
+            refreshUrlLists();
         }
 
         // ... (windowControls, switchTab, updateSettingsFromUI 等保持不变) ...
@@ -1661,6 +1815,8 @@
             const bgMode = document.getElementById('bg-mode-select').value;
             const fontFamily = document.getElementById('font-select').value;
             const mirrorPrefix = document.getElementById('mirror-prefix-input').value;
+            const customLatestUrl = document.getElementById('custom-latest-url-input').value.trim();
+            const customUpdaterUrl = document.getElementById('custom-updater-url-input').value.trim();
 
             document.getElementById('mask-opacity-val').innerText = opacity + '%';
             document.getElementById('blur-radius-val').innerText = blur + 'px';
@@ -1738,6 +1894,8 @@
             currentSettings.bg_mode = bgMode;
             currentSettings.font_family = fontFamily;
             currentSettings.mirror_prefix = mirrorPrefix;
+            currentSettings.custom_latest_url = customLatestUrl;
+            currentSettings.custom_updater_url = customUpdaterUrl;
 
             saveSettingsDebounced();
         }
@@ -1773,13 +1931,21 @@
 
         function restoreDefaults() {
             if (confirm("确定要恢复所有界面设置到默认状态吗？")) {
+                // 保留非界面类设置，避免重置时丢失版本跳过记录和窗口大小
+                const preservedSkipped = currentSettings.skipped_versions || [];
+                const preservedWindowSize = currentSettings.window_size || "950x700";
+
                 currentSettings = {
                     bg_type: 'default', custom_bg_data: '',
                     visual_effect: 'glass', mask_opacity: 40, blur_radius: 0,
                     text_color: '#333333', accent_color: '#f59e0b',
                     bg_mode: 'cover', font_family: "'Segoe UI', system-ui, sans-serif",
                     current_version: localVersion,
-                    mirror_prefix: "https://gh-proxy.org/"
+                    mirror_prefix: "https://gh-proxy.org/",
+                    custom_latest_url: "",
+                    custom_updater_url: "",
+                    skipped_versions: preservedSkipped,
+                    window_size: preservedWindowSize
                 };
                 document.getElementById('visual-effect-select').value = 'glass';
                 document.getElementById('mask-opacity-range').value = 40;
@@ -1787,9 +1953,138 @@
                 document.getElementById('bg-mode-select').value = 'cover';
                 document.getElementById('font-select').value = "'Segoe UI', system-ui, sans-serif";
                 document.getElementById('mirror-prefix-input').value = "https://gh-proxy.org/";
+                document.getElementById('custom-latest-url-input').value = "";
+                document.getElementById('custom-updater-url-input').value = "";
                 restoreDefaultBg();
                 updateSettingsFromUI();
             }
+        }
+
+        /**
+         * 恢复默认更新源地址
+         * 仅重置 latest.json 和 Updater-latest.json 的自定义 URL，不影响其他设置
+         */
+        function restoreDefaultUpdateUrls() {
+            if (confirm("确定要将更新源地址恢复为默认值吗？")) {
+                currentSettings.custom_latest_url = "";
+                currentSettings.custom_updater_url = "";
+                document.getElementById('custom-latest-url-input').value = "";
+                document.getElementById('custom-updater-url-input').value = "";
+                saveSettingsDebounced();
+                refreshUrlLists();
+            }
+        }
+
+        // === 固定的 GitHub 地址常量（与 Python 后端保持一致）===
+        const GITHUB_LATEST_URL = "https://github.com/KanameMadoka520/TCY-Client-Updater/releases/download/versions/latest.json";
+        const GITHUB_UPDATER_URL = "https://github.com/KanameMadoka520/TCY-Client-Updater/releases/download/versions/Updater-latest.json";
+        const DEFAULT_LATEST_URL = "https://tcymc.space/update/latest.json";
+        const DEFAULT_UPDATER_URL = "https://tcymc.space/update/Updater-latest.json";
+
+        function buildUrlList(defaultUrl, githubUrl, customUrl, mirrorPrefix) {
+            const urls = [];
+            if (customUrl) urls.push(customUrl);
+            urls.push(defaultUrl);
+            urls.push(githubUrl);
+            if (mirrorPrefix && !githubUrl.startsWith(mirrorPrefix)) {
+                urls.push(mirrorPrefix + githubUrl);
+            }
+            // 去重保序
+            return [...new Map(urls.map(u => [u, u])).values()];
+        }
+
+        function refreshUrlLists() {
+            const mirror = (currentSettings.mirror_prefix || "https://gh-proxy.org/").trim();
+            const customLatest = (currentSettings.custom_latest_url || "").trim();
+            const customUpdater = (currentSettings.custom_updater_url || "").trim();
+
+            const latestUrls = buildUrlList(DEFAULT_LATEST_URL, GITHUB_LATEST_URL, customLatest, mirror);
+            const updaterUrls = buildUrlList(DEFAULT_UPDATER_URL, GITHUB_UPDATER_URL, customUpdater, mirror);
+
+            function renderList(urls, customUrl) {
+                return urls.map((u, i) => {
+                    let tag = '';
+                    if (u === customUrl) tag = ' <span style="color:#f59e0b; font-size:10px;">[自定义]</span>';
+                    else if (u === DEFAULT_LATEST_URL || u === DEFAULT_UPDATER_URL) tag = ' <span style="color:#64748b; font-size:10px;">[官网默认]</span>';
+                    else if (u === GITHUB_LATEST_URL || u === GITHUB_UPDATER_URL) tag = ' <span style="color:#6366f1; font-size:10px;">[GitHub]</span>';
+                    else tag = ' <span style="color:#10b981; font-size:10px;">[GitHub+加速]</span>';
+                    return `<div>${i + 1}. ${u}${tag}</div>`;
+                }).join('');
+            }
+
+            document.getElementById('latest-url-list').innerHTML = renderList(latestUrls, customLatest);
+            document.getElementById('updater-url-list').innerHTML = renderList(updaterUrls, customUpdater);
+        }
+
+        // === 连接检查结果弹窗 ===
+        let _pendingVersionModal = null;
+
+        function showFetchResultDialog(result) {
+            const { client, updater, all_failed } = result;
+
+            function renderRows(label, urls, ok, fail) {
+                return urls.map(u => {
+                    const isOk = ok.includes(u);
+                    const icon = isOk ? '✅' : '❌';
+                    return `<tr>
+                        <td style="padding:3px 6px; white-space:nowrap;">${icon}</td>
+                        <td style="padding:3px 6px; font-family:'Consolas',monospace; font-size:11px; word-break:break-all;">${u}</td>
+                        <td style="padding:3px 6px; white-space:nowrap; font-size:11px; opacity:0.7;">${label}</td>
+                    </tr>`;
+                }).join('');
+            }
+
+            const rows = renderRows('客户端版本', client.urls, client.ok, client.fail)
+                       + renderRows('更新器版本', updater.urls, updater.ok, updater.fail);
+
+            const okCount = client.ok.length + updater.ok.length;
+            const totalCount = client.urls.length + updater.urls.length;
+
+            let statusMsg, statusColor;
+            if (all_failed) {
+                statusMsg = '⛔ 所有地址均无法连接，请联系糖醋鱼！';
+                statusColor = '#ef4444';
+            } else {
+                statusMsg = `✅ 已成功连接 ${okCount} / ${totalCount} 个地址，更新功能正常可用。`;
+                statusColor = '#10b981';
+            }
+
+            const html = `
+                <div style="font-size:13px; margin-bottom:10px; color:${statusColor}; font-weight:bold;">${statusMsg}</div>
+                <div style="font-size:12px; margin-bottom:10px; opacity:0.75;">
+                    至少有一个链接能拉取到信息就是正常的，否则联系糖醋鱼。
+                </div>
+                <div style="overflow-x:auto; max-height:260px; overflow-y:auto;">
+                    <table style="width:100%; border-collapse:collapse; font-size:12px;">
+                        <thead>
+                            <tr style="border-bottom:1px solid rgba(0,0,0,0.1);">
+                                <th style="padding:4px 6px; text-align:left; opacity:0.6;">状态</th>
+                                <th style="padding:4px 6px; text-align:left; opacity:0.6;">地址</th>
+                                <th style="padding:4px 6px; text-align:left; opacity:0.6;">用途</th>
+                            </tr>
+                        </thead>
+                        <tbody>${rows}</tbody>
+                    </table>
+                </div>
+                <div style="margin-top:14px; text-align:right;">
+                    <button class="btn small" onclick="closeFetchResultDialog()">${all_failed ? '关闭' : '确定，查看版本信息'}</button>
+                </div>`;
+
+            document.getElementById('fetch-result-content').innerHTML = html;
+            document.getElementById('fetch-result-modal').style.display = 'flex';
+        }
+
+        function closeFetchResultDialog() {
+            document.getElementById('fetch-result-modal').style.display = 'none';
+            if (_pendingVersionModal) {
+                const payload = _pendingVersionModal;
+                _pendingVersionModal = null;
+                showCombinedVersionModal(payload);
+            }
+        }
+
+        function setPendingVersionModal(payload) {
+            _pendingVersionModal = payload;
         }
 
         /**
@@ -1976,41 +2271,87 @@
         function refreshVersions() { pywebview.api.scan_versions().then(vs => { const sel = document.getElementById('version-select'); sel.innerHTML = ''; vs.forEach(v => sel.add(new Option(v, v))); }); }
         function startUpdate() { const v = document.getElementById('version-select').value; if (v && confirm('确定更新？')) pywebview.api.run_update(v); }
 
-        // === [核心逻辑重写] 渲染更新列表 ===
-        function showUpdateListModal(updates) {
-            pendingUpdates = updates; // 存储后端发来的完整队列
+        // === [核心逻辑重写] 综合版本信息弹窗 ===
+        let pendingUpdaterInfo = null;
+
+        function showCombinedVersionModal(payload) {
+            const { updates, updater_info, local_ver, launcher_ver } = payload;
+            pendingUpdates = updates || [];
+            pendingUpdaterInfo = updater_info || null;
+
+            // 版本号显示
+            document.getElementById('modal-local-ver').innerText = local_ver || localVersion;
+            document.getElementById('modal-launcher-ver').innerText = launcher_ver || '';
+
+            // 隐藏旧的 fetch-warn 区域（已由独立弹窗替代）
+            document.getElementById('fetch-warn-area').style.display = 'none';
+
+            // 更新器新版本提示
+            const updaterArea = document.getElementById('updater-info-area');
+            if (updater_info) {
+                document.getElementById('updater-info-text').innerText =
+                    `新版本：${updater_info.remote_ver}\n更新内容：${updater_info.desc}`;
+                updaterArea.style.display = 'block';
+            } else {
+                updaterArea.style.display = 'none';
+            }
+
+            // 客户端更新列表
             const container = document.getElementById('update-list-content');
             container.innerHTML = '';
+            const subtitle = document.getElementById('update-subtitle');
 
-            updates.forEach((item, index) => {
-                const isOptional = item.opt_update === true;
-                const div = document.createElement('div');
-                div.className = `update-item ${isOptional ? 'optional' : 'mandatory'}`;
-
-                let checkHtml = '';
-                if (isOptional) {
-                    // 可选更新：显示复选框 (默认勾选)
-                    checkHtml = `<input type="checkbox" class="update-checkbox" data-index="${index}" checked>`;
-                } else {
-                    // 强制更新：显示空占位或锁定图标
-                    checkHtml = `<div style="width:18px; text-align:center; color:#ef4444; font-weight:bold;">!</div>`;
-                }
-
-                div.innerHTML = `
-                    ${checkHtml}
-                    <div class="update-content">
-                        <div class="update-header">
-                            <span>${item.version} <small style="font-weight:normal; opacity:0.6">${item.date || ''}</small></span>
-                            <span class="update-badge ${isOptional ? 'badge-opt' : 'badge-req'}">${isOptional ? '可选' : '必选'}</span>
-                        </div>
-                        <div class="update-body">${item.desc}</div>
-                    </div>
-                `;
-                container.appendChild(div);
-            });
+            if (pendingUpdates.length === 0) {
+                subtitle.innerText = '当前客户端已是最新版本。';
+                container.innerHTML = '<div style="text-align:center; padding:20px; opacity:0.5; font-size:13px;">无待更新内容</div>';
+                document.getElementById('btn-area').innerHTML =
+                    '<button class="btn outline" onclick="closeUpdateModal()">关闭</button>';
+            } else {
+                subtitle.innerText = `检测到 ${pendingUpdates.length} 个未安装版本，请选择需要更新的内容：`;
+                pendingUpdates.forEach((item, index) => {
+                    const isOptional = item.opt_update === true;
+                    const div = document.createElement('div');
+                    div.className = `update-item ${isOptional ? 'optional' : 'mandatory'}`;
+                    let checkHtml = isOptional
+                        ? `<input type="checkbox" class="update-checkbox" data-index="${index}" checked>`
+                        : `<div style="width:18px; text-align:center; color:#ef4444; font-weight:bold;">!</div>`;
+                    div.innerHTML = `
+                        ${checkHtml}
+                        <div class="update-content">
+                            <div class="update-header">
+                                <span>${item.version} <small style="font-weight:normal; opacity:0.6">${item.date || ''}</small></span>
+                                <span class="update-badge ${isOptional ? 'badge-opt' : 'badge-req'}">${isOptional ? '可选' : '必选'}</span>
+                            </div>
+                            <div class="update-body">${item.desc}</div>
+                        </div>`;
+                    container.appendChild(div);
+                });
+                // 恢复默认按钮
+                document.getElementById('btn-area').innerHTML =
+                    `<button class="btn" onclick="triggerDownload('cn')">🚀 CN 加速更新</button>
+                     <button class="btn outline" onclick="triggerDownload('global')">🌐 全球节点</button>
+                     <button class="btn danger-outline" onclick="closeUpdateModal()">暂不更新</button>`;
+            }
 
             resetUpdateModalState();
             document.getElementById('update-modal').style.display = 'flex';
+        }
+
+        // 兼容旧调用（保留）
+        function showUpdateListModal(updates) {
+            showCombinedVersionModal({ updates: updates, updater_info: null, fetch_warn: '', local_ver: localVersion, launcher_ver: '' });
+        }
+
+        function doUpdaterSelfUpdate() {
+            if (!pendingUpdaterInfo) return;
+            if (confirm(`确定要更新更新器到 ${pendingUpdaterInfo.remote_ver} 吗？\n\n更新内容：${pendingUpdaterInfo.desc}\n\n点击确定将自动下载并重启。`)) {
+                pywebview.api.perform_self_update(pendingUpdaterInfo.url, pendingUpdaterInfo.remote_ver);
+            }
+        }
+
+        function dismissUpdaterInfo() {
+            document.getElementById('updater-info-area').style.display = 'none';
+            pendingUpdaterInfo = null;
         }
 
         function closeUpdateModal() {
@@ -2072,19 +2413,76 @@
 
         // === [新增] 更新详细进度信息 (速度 + 状态 + 百分比) ===
         function updateProgressDetails(percent, speed, status) {
-            // 更新进度条
             document.getElementById('dl-bar').style.width = percent + '%';
             document.getElementById('dl-percent').innerText = percent + '%';
-
-            // 更新速度
-            if (speed) {
-                document.getElementById('dl-speed-text').innerText = speed;
+            if (speed) document.getElementById('dl-speed-text').innerText = speed;
+            if (status) document.getElementById('dl-status-text').innerText = status;
+            // 同步强制更新弹窗进度（如果打开着）
+            const forceBar = document.getElementById('force-dl-bar');
+            if (forceBar) {
+                forceBar.style.width = percent + '%';
+                document.getElementById('force-dl-percent').innerText = percent + '%';
+                if (speed) document.getElementById('force-dl-speed').innerText = speed;
+                if (status) document.getElementById('force-dl-status').innerText = status;
             }
+        }
 
-            // 更新状态文本 (例如: "正在下载 (3/10): xxx.jar")
-            if (status) {
-                document.getElementById('dl-status-text').innerText = status;
+        // === 强制拉取历史版本弹窗逻辑 ===
+        let allHistoryVersions = [];
+        let selectedForceVersion = null;
+
+        function showForceUpdateModal(history) {
+            allHistoryVersions = history;
+            selectedForceVersion = null;
+            const list = document.getElementById('force-update-list');
+            list.innerHTML = '';
+
+            history.forEach((item, index) => {
+                const div = document.createElement('div');
+                div.className = 'update-item mandatory';
+                div.style.cursor = 'pointer';
+                div.dataset.index = index;
+                div.innerHTML = `
+                    <input type="radio" name="force-ver-radio" value="${index}" style="margin-right:4px; cursor:pointer;">
+                    <div class="update-content">
+                        <div class="update-header">
+                            <span>${item.version} <small style="font-weight:normal; opacity:0.6">${item.date || ''}</small></span>
+                            <span class="update-badge badge-req">历史版本</span>
+                        </div>
+                        <div class="update-body">${item.desc || '无描述'}</div>
+                    </div>`;
+                div.addEventListener('click', () => {
+                    const radio = div.querySelector('input[type=radio]');
+                    radio.checked = true;
+                    selectedForceVersion = item;
+                    list.querySelectorAll('.update-item').forEach(el => el.style.background = '');
+                    div.style.background = 'rgba(239,68,68,0.08)';
+                });
+                list.appendChild(div);
+            });
+
+            document.getElementById('force-progress-area').style.display = 'none';
+            document.getElementById('force-btn-area').style.display = 'flex';
+            document.getElementById('force-update-modal').style.display = 'flex';
+        }
+
+        function closeForceUpdateModal() {
+            document.getElementById('force-update-modal').style.display = 'none';
+            selectedForceVersion = null;
+        }
+
+        function triggerForceDownload(source) {
+            if (!selectedForceVersion) {
+                alert('请先从列表中选择一个要强制重新应用的版本！');
+                return;
             }
+            const ver = selectedForceVersion.version;
+            if (!confirm(`确定要强制重新应用版本 ${ver} 的更新规则吗？\n\n此操作会忽略当前版本号，直接执行该版本的更新内容。`)) return;
+
+            document.getElementById('force-btn-area').style.display = 'none';
+            document.getElementById('force-progress-area').style.display = 'block';
+
+            pywebview.api.start_update_sequence(JSON.stringify([selectedForceVersion]), source);
         }
 
         // === [新增] 启动时的目录位置强校验 ===

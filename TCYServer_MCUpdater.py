@@ -74,9 +74,17 @@ TARGET_VERSION_NAME = "异界战斗幻想"
 CONFIG_FILE = "launcher_settings.json"
 
 # ===整合包初始版本 (客户端内容版本) ===
-INITIAL_VERSION = "26.02.06.15.24" 
+INITIAL_VERSION = "26.02.06.15.24"
 # ===更新器自身版本 (传统版本号) ===
-LAUNCHER_INTERNAL_VERSION = "1.0.0" 
+LAUNCHER_INTERNAL_VERSION = "1.0.1"
+
+# === 默认版本检查 JSON 地址 ===
+DEFAULT_LATEST_JSON_URL = "https://tcymc.space/update/latest.json"
+DEFAULT_UPDATER_JSON_URL = "https://tcymc.space/update/Updater-latest.json"
+
+# === GitHub 备用地址 ===
+GITHUB_LATEST_JSON_URL = "https://github.com/KanameMadoka520/TCY-Client-Updater/releases/download/versions/latest.json"
+GITHUB_UPDATER_JSON_URL = "https://github.com/KanameMadoka520/TCY-Client-Updater/releases/download/versions/Updater-latest.json"
 
 global_window = None
 
@@ -101,9 +109,12 @@ class ConfigManager:
             # ===自定义镜像前缀 ===
             "mirror_prefix": "https://gh-proxy.org/",
             # === 默认窗口大小 (宽x高) ===
-            "window_size": "950x600",
+            "window_size": "950x700",
             # ===跳过的可选版本记录 ===
-            "skipped_versions": []
+            "skipped_versions": [],
+            # === 自定义版本检查 JSON 地址 (为空则使用默认地址) ===
+            "custom_latest_url": "",
+            "custom_updater_url": ""
         }
         self.config = self.load_config()
     def load_config(self):
@@ -366,45 +377,66 @@ class Api:
             try: os.startfile(target_path)
             except: pass
     
+    # === 多源轮询获取 JSON 的通用方法 ===
+
+    def _fetch_json_from_urls(self, url_list):
+        """
+        检查 url_list 中的每个地址，全部都尝试，收集所有结果。
+        返回 (data, success_urls, failed_urls)
+        data 取第一个成功的结果，None 表示全部失败。
+        """
+        success_urls = []
+        failed_urls = []
+        first_data = None
+        for url in url_list:
+            try:
+                req = urllib.request.Request(
+                    url,
+                    headers={'User-Agent': 'TCYClientUpdater/1.0'}
+                )
+                context = ssl._create_unverified_context()
+                with urllib.request.urlopen(req, timeout=8, context=context) as resp:
+                    data = json.loads(resp.read().decode('utf-8'))
+                success_urls.append(url)
+                if first_data is None:
+                    first_data = data
+            except Exception as e:
+                self.log(f"[轮询] 无法从 {url} 获取信息: {e}")
+                failed_urls.append(url)
+        return first_data, success_urls, failed_urls
+
+    def _build_url_list(self, default_url, github_url, custom_url=""):
+        """
+        构建轮询列表：自定义URL（若有）> 默认URL > GitHub原始URL > GitHub加速URL
+        """
+        mirror = self.cfg_mgr.config.get("mirror_prefix", "https://gh-proxy.org/").strip()
+        urls = []
+        if custom_url:
+            urls.append(custom_url)
+        urls.append(default_url)
+        urls.append(github_url)
+        if mirror and not github_url.startswith(mirror):
+            urls.append(mirror + github_url)
+        # 去重保序
+        seen = set()
+        result = []
+        for u in urls:
+            if u not in seen:
+                seen.add(u)
+                result.append(u)
+        return result
+
     # === 更新器自我更新逻辑 ===
 
     def check_launcher_self_update(self):
         """
-        检查更新器自身是否需要更新，访问 tcymc.space/update/Updater-latest.json
+        检查更新器自身是否需要更新，多源轮询 Updater-latest.json
+        仅用于在 _check_update_thread 外单独调用的场景（目前未使用）
         """
-        url = "https://tcymc.space/update/Updater-latest.json"
-        try:
-            req = urllib.request.Request(
-                url, 
-                headers={'User-Agent': 'TCYClientUpdater/1.0'}
-            )
-            context = ssl._create_unverified_context()
-            with urllib.request.urlopen(req, timeout=5, context=context) as response:
-                launcher_info = json.loads(response.read().decode('utf-8'))
-            
-            remote_ver = launcher_info.get("version", "0.0.0")
-            
-            if remote_ver != LAUNCHER_INTERNAL_VERSION: 
-                self.log(f"发现更新器新版本: {remote_ver} (当前: {LAUNCHER_INTERNAL_VERSION})")
-                
-                msg = f"发现更新器新版本 ({remote_ver})！\n\n更新内容：\n{launcher_info.get('desc', '无')}\n\n点击确定将自动下载并重启。"
-                if global_window:
-                    do_update = global_window.evaluate_js(f"confirm(`{msg}`)")
-                    if do_update:
-                        dl_url = launcher_info.get('url')
-                        # 更新器更新也尝试走镜像加速
-                        prefix = self.cfg_mgr.config.get("mirror_prefix", "https://gh-proxy.org/")
-                        if "github.com" in dl_url and prefix:
-                             if not dl_url.startswith(prefix):
-                                dl_url = prefix + dl_url
-
-                        # 👇 修改了这里：把 remote_ver 传进去
-                        self.perform_self_update(dl_url, remote_ver)
-                        return True 
-        except Exception as e:
-            self.log(f"自更新检查跳过: {e}")
-        
-        return False
+        custom_url = self.cfg_mgr.config.get("custom_updater_url", "").strip()
+        url_list = self._build_url_list(DEFAULT_UPDATER_JSON_URL, GITHUB_UPDATER_JSON_URL, custom_url)
+        launcher_info, success_urls, failed_urls = self._fetch_json_from_urls(url_list)
+        return launcher_info, success_urls, failed_urls
 
     def perform_self_update(self, url, version):
         """下载新版 EXE 并执行替换脚本（强制重命名为 TCYClientUpdater-版本号.exe）"""
@@ -427,7 +459,7 @@ class Api:
             urllib.request.urlretrieve(url, temp_download_name, report)
             
             # 3. 生成批处理脚本
-            # 逻辑：删除旧文件名 -> 把下载的临时文件重命名为“TCYClientUpdater-1.x.x.exe” -> 启动新文件
+            # 逻辑：删除旧文件名 -> 把下载的临时文件重命名为"TCYClientUpdater-1.x.x.exe" -> 启动新文件
             bat_script = "update_self.bat"
             with open(bat_script, "w", encoding="gbk") as f:
                 f.write("@echo off\n")
@@ -473,59 +505,87 @@ class Api:
         threading.Thread(target=self._check_update_thread).start()
 
     def _check_update_thread(self):
-        if self.check_launcher_self_update(): return
+        self.log("正在从多个来源获取版本信息，请稍候...")
 
-        url = "https://tcymc.space/update/latest.json"
-        try:
-            self.log("正在获取客户端版本信息...")
-            req = urllib.request.Request(
-                url, 
-                headers={'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36 TCYClientUpdater/1.0'}
-            )
-            context = ssl._create_unverified_context()
+        # === 构建轮询列表 ===
+        custom_latest = self.cfg_mgr.config.get("custom_latest_url", "").strip()
+        latest_urls = self._build_url_list(DEFAULT_LATEST_JSON_URL, GITHUB_LATEST_JSON_URL, custom_latest)
 
-            with urllib.request.urlopen(req, timeout=10, context=context) as response:
-                data = json.loads(response.read().decode('utf-8'))
-                
+        custom_updater = self.cfg_mgr.config.get("custom_updater_url", "").strip()
+        updater_urls = self._build_url_list(DEFAULT_UPDATER_JSON_URL, GITHUB_UPDATER_JSON_URL, custom_updater)
+
+        # === 全部检查，收集每个地址的结果 ===
+        client_data, client_ok_urls, client_fail_urls = self._fetch_json_from_urls(latest_urls)
+        updater_data, updater_ok_urls, updater_fail_urls = self._fetch_json_from_urls(updater_urls)
+
+        # === 记录日志 ===
+        for u in client_ok_urls:
+            self.log(f"[OK] [客户端版本] {u}")
+        for u in client_fail_urls:
+            self.log(f"[FAIL] [客户端版本] {u}")
+        for u in updater_ok_urls:
+            self.log(f"[OK] [更新器版本] {u}")
+        for u in updater_fail_urls:
+            self.log(f"[FAIL] [更新器版本] {u}")
+
+        # === 构建连接检查结果，发给前端先弹提示弹窗 ===
+        fetch_result = {
+            "client": {
+                "urls": latest_urls,
+                "ok": client_ok_urls,
+                "fail": client_fail_urls
+            },
+            "updater": {
+                "urls": updater_urls,
+                "ok": updater_ok_urls,
+                "fail": updater_fail_urls
+            },
+            "all_failed": (client_data is None and updater_data is None)
+        }
+
+        if global_window:
+            global_window.evaluate_js(f"showFetchResultDialog({json.dumps(fetch_result)})")
+
+        # === 全部失败则不继续 ===
+        if client_data is None and updater_data is None:
+            self.log("所有版本信息来源均获取失败")
+            return
+
+        # === 处理更新器自身版本 ===
+        updater_info_for_modal = None
+        if updater_data:
+            remote_ver = updater_data.get("version", "0.0.0")
+            if remote_ver != LAUNCHER_INTERNAL_VERSION:
+                updater_info_for_modal = {
+                    "remote_ver": remote_ver,
+                    "desc": updater_data.get("desc", "无"),
+                    "url": updater_data.get("url", "")
+                }
+
+        # === 处理客户端更新队列 ===
+        updates_queue = []
+        if client_data:
             local_ver = self.get_local_version()
             skipped_list = self.cfg_mgr.config.get("skipped_versions", [])
-            
-            # === [核心重构] 构建更新队列 ===
-            # 我们需要找出所有“比当前版本新”或者“虽然旧但被跳过”的版本
-            updates_queue = []
-            
-            if 'history' in data and isinstance(data['history'], list):
-                # 假设 history 是按时间倒序（最新在最前），我们将其反转为正序处理
-                # 或者直接遍历，只要版本匹配条件就加入
-                
-                # 为了按顺序展示，我们先收集所有候选，然后按版本号排序
+            if 'history' in client_data and isinstance(client_data['history'], list):
                 candidates = []
-                for item in data['history']:
+                for item in client_data['history']:
                     v = item.get('version')
-                    # 判定条件：版本号 > 本地版本 OR 版本号在跳过列表中
-                    # 注意：字符串比较版本号需谨慎，最好保证格式统一
                     if v > local_ver or v in skipped_list:
                         candidates.append(item)
-                
-                # 按版本号从小到大排序 (确保先装旧的补丁，再装新的)
                 candidates.sort(key=lambda x: x.get('version', '0'))
                 updates_queue = candidates
 
-            if len(updates_queue) > 0:
-                self.log(f"检测到 {len(updates_queue)} 个待更新版本")
-                # 将队列发送给前端，前端生成列表供用户勾选
-                if global_window:
-                    global_window.evaluate_js(f"showUpdateListModal({json.dumps(updates_queue)})")
-            else:
-                self.log(f"当前已是最新版本 ({local_ver})。")
-                if global_window:
-                    global_window.evaluate_js("alert('当前已是最新版本！')")
-                    
-        except Exception as e:
-            self.log(f"检查更新失败: {e}")
-            if global_window:
-                global_window.evaluate_js(f"alert('检查更新失败：{str(e)}')")
-                global_window.evaluate_js("resetUpdateModalState()")
+        # === 将版本信息发给前端展示 ===
+        modal_payload = {
+            "updates": updates_queue,
+            "updater_info": updater_info_for_modal,
+            "local_ver": self.get_local_version(),
+            "launcher_ver": LAUNCHER_INTERNAL_VERSION
+        }
+
+        if global_window:
+            global_window.evaluate_js(f"setPendingVersionModal({json.dumps(modal_payload)})")
 
     # ===批量更新执行逻辑 ===
     # 前端会发回一个列表：[{version:..., url:..., ...}, {...}] (用户勾选的 + 强制的)
@@ -539,7 +599,7 @@ class Api:
             
             self.log(f"开始批量更新流程，共 {total_updates} 个版本...")
             
-            # 获取当前所有可用的“可选版本”列表，用于计算稍后要存入 skipped 的内容
+            # 获取当前所有可用的"可选版本"列表，用于计算稍后要存入 skipped 的内容
             # 这里简单处理：如果安装成功，从 skipped 移除；如果未安装且在 skipped，保持。
             # 更精确的逻辑在循环结束后处理。
             
@@ -587,14 +647,14 @@ class Api:
                     if v in new_skipped:
                         new_skipped.remove(v)
                 
-                # 3. 这里的逻辑略复杂：我们怎么知道哪些被用户“取消勾选”了？
+                # 3. 这里的逻辑略复杂：我们怎么知道哪些被用户"取消勾选"了？
                 # 实际上，_check_update_thread 里找到的所有 candidates，减去 successful_versions，剩下的就是被跳过的
                 # 但这里我们在后端拿不到完整的 candidates。
-                # 简化逻辑：前端发过来的 update_list_json 已经是用户“确认要装”的。
-                # 所以我们只需要把“装成功的”移除。
-                # 那“新增的跳过”怎么加？
+                # 简化逻辑：前端发过来的 update_list_json 已经是用户"确认要装"的。
+                # 所以我们只需要把"装成功的"移除。
+                # 那"新增的跳过"怎么加？
                 # 答：需要前端传另一个参数，或者由前端调用 record_skip。
-                # 为了简单可靠，我们在前端处理“记录跳过”。(见前端代码)
+                # 为了简单可靠，我们在前端处理"记录跳过"。(见前端代码)
                 
                 self.cfg_mgr.save_config({"skipped_versions": list(new_skipped)})
                 
@@ -769,6 +829,33 @@ class Api:
             self.cfg_mgr.save_config({"skipped_versions": skipped})
             self.log(f"已标记跳过: {version}")
 
+    def get_all_history(self):
+        """获取所有历史版本列表，供强制拉取功能使用"""
+        threading.Thread(target=self._get_all_history_thread).start()
+
+    def _get_all_history_thread(self):
+        self.log("正在获取全部历史版本列表...")
+        custom_latest = self.cfg_mgr.config.get("custom_latest_url", "").strip()
+        url_list = self._build_url_list(DEFAULT_LATEST_JSON_URL, GITHUB_LATEST_JSON_URL, custom_latest)
+        data, success_urls, failed_urls = self._fetch_json_from_urls(url_list)
+
+        if data is None:
+            if global_window:
+                global_window.evaluate_js("alert('获取历史版本列表失败，请检查网络连接。')")
+            return
+
+        history = data.get('history', [])
+        if not history:
+            if global_window:
+                global_window.evaluate_js("alert('未找到任何历史版本记录。')")
+            return
+
+        # 按版本号从小到大排序
+        history_sorted = sorted(history, key=lambda x: x.get('version', '0'))
+        self.log(f"获取到 {len(history_sorted)} 个历史版本")
+        if global_window:
+            global_window.evaluate_js(f"showForceUpdateModal({json.dumps(history_sorted)})")
+
 def main():
     freeze_support()
     global global_window
@@ -776,12 +863,12 @@ def main():
         api = Api()
         # === ✅读取保存的窗口大小 ===
         # 获取配置字符串，例如 "1280x720"
-        size_str = api.cfg_mgr.config.get("window_size", "950x600")
+        size_str = api.cfg_mgr.config.get("window_size", "950x700")
         try:
             # 解析宽高
             init_w, init_h = map(int, size_str.split('x'))
         except:
-            init_w, init_h = 950, 600
+            init_w, init_h = 950, 700
 
         html_file = get_resource_path("index.html")
         if not os.path.exists(html_file): return
