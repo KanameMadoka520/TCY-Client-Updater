@@ -1,6 +1,6 @@
 # TCY Client Updater (原 TCYServer_MCUpdater)
 
-![Version](https://img.shields.io/badge/version-1.0.0-blue) ![Author](https://img.shields.io/badge/author-KanameMadoka520-purple) 
+![Version](https://img.shields.io/badge/version-1.0.1-blue) ![Author](https://img.shields.io/badge/author-KanameMadoka520-purple) 
 ![Author](https://img.shields.io/badge/author-LainElaina-purple) 
 [![License](https://img.shields.io/badge/license-CC%20BY--NC--SA%204.0-green)](https://github.com/KanameMadoka520/TCY-Client-Updater/blob/main/LICENSE)
 
