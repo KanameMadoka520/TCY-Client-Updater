@@ -76,7 +76,7 @@ CONFIG_FILE = "launcher_settings.json"
 # ===整合包初始版本 (客户端内容版本) ===
 INITIAL_VERSION = "26.02.06.15.24"
 # ===更新器自身版本 (传统版本号) ===
-LAUNCHER_INTERNAL_VERSION = "1.0.1"
+LAUNCHER_INTERNAL_VERSION = "1.0.2"
 
 # === 默认版本检查 JSON 地址 ===
 DEFAULT_LATEST_JSON_URL = "https://tcymc.space/update/latest.json"
@@ -114,7 +114,9 @@ class ConfigManager:
             "skipped_versions": [],
             # === 自定义版本检查 JSON 地址 (为空则使用默认地址) ===
             "custom_latest_url": "",
-            "custom_updater_url": ""
+            "custom_updater_url": "",
+            # === 缓存的更新历史记录 (从 latest.json 拉取后写入本地) ===
+            "cached_history": []
         }
         self.config = self.load_config()
     def load_config(self):
@@ -562,6 +564,11 @@ class Api:
                     "url": updater_data.get("url", "")
                 }
 
+        # === 缓存更新历史到本地 (供更新日志时间线视图使用) ===
+        if client_data and 'history' in client_data and isinstance(client_data['history'], list):
+            self.cfg_mgr.save_config({"cached_history": client_data['history']})
+            self.log(f"已缓存 {len(client_data['history'])} 条更新历史到本地")
+
         # === 处理客户端更新队列 ===
         updates_queue = []
         if client_data:
@@ -828,6 +835,15 @@ class Api:
             skipped.append(version)
             self.cfg_mgr.save_config({"skipped_versions": skipped})
             self.log(f"已标记跳过: {version}")
+
+    def get_cached_history(self):
+        """从本地缓存读取更新历史记录，供更新日志时间线视图使用"""
+        cached = self.cfg_mgr.config.get("cached_history", [])
+        if cached:
+            # 按版本号从新到旧排序
+            cached_sorted = sorted(cached, key=lambda x: x.get('version', '0'), reverse=True)
+            return json.dumps(cached_sorted)
+        return json.dumps([])
 
     def get_all_history(self):
         """获取所有历史版本列表，供强制拉取功能使用"""

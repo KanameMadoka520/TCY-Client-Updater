@@ -18,3 +18,4 @@ TCY-Client-Updater.new
 update_self.bat
 run-build.py.bat
 TCY一键git push.bat
+.env
