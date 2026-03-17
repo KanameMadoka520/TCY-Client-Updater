@@ -1,6 +1,7 @@
 # Python 编译文件
 __pycache__/
 *.py[cod]
+.planning
 
 # PyInstaller 打包生成文件
 build/
@@ -19,3 +20,4 @@ update_self.bat
 run-build.py.bat
 TCY一键git push.bat
 .env
+1.0.6版本规划方向.txt

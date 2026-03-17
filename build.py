@@ -2,18 +2,55 @@ import os
 import base64
 import sys
 import shutil
+import glob
 
 # === 配置区 ===
 ICON_FILE = "icon.ico"            
 MAIN_SCRIPT = "TCYServer_MCUpdater.py" 
 ASSET_FILE = "tcy_assets.py"
-EXE_NAME = "TCYClientUpdater-1.0.2"
+EXE_NAME = "TCYClientUpdater-1.0.6"
+DIST_DIR = "dist"
 # 新增：指定要包含的额外文件
 # 格式：("源文件", "目标路径")，目标路径 "." 表示根目录
-ADDED_DATA = [("index.html", ".")]
+ADDED_DATA = [("index.html", "."), ("lib/d3.min.js", "lib"), ("TCYNBTeditor.html", "."), ("jvm_advisor.js", "."), ("system_overview.js", ".")]
+
+RUNTIME_RESIDUE_FILES = [
+    "launcher_debug.log",
+    "launcher_settings.json",
+    "CRASH_IMPORT.txt",
+]
+
+
+def clean_dist_release_residue():
+    os.makedirs(DIST_DIR, exist_ok=True)
+    removed = []
+
+    for path in glob.glob(os.path.join(DIST_DIR, "TCYClientUpdater-*.exe")):
+        if os.path.basename(path) == f"{EXE_NAME}.exe":
+            continue
+        try:
+            os.remove(path)
+            removed.append(path)
+        except Exception as e:
+            print(f"⚠️ 清理旧 EXE 失败：{path} -> {e}")
+
+    for filename in RUNTIME_RESIDUE_FILES:
+        path = os.path.join(DIST_DIR, filename)
+        if not os.path.exists(path):
+            continue
+        try:
+            os.remove(path)
+            removed.append(path)
+        except Exception as e:
+            print(f"⚠️ 清理运行时残留失败：{path} -> {e}")
+
+    return removed
 
 def main():
     print("🚀 TCY 更新器自动构建工具启动...")
+    removed_before = clean_dist_release_residue()
+    if removed_before:
+        print(f"🧽 已清理 dist 目录中的旧发布残留：{len(removed_before)} 项")
     
     # 1. 检测并处理背景图片 (逻辑不变)
     bg_b64_str = ""
@@ -46,6 +83,7 @@ def main():
         "--onefile",
         f'--name="{EXE_NAME}"',
         f'--hidden-import={ASSET_FILE.replace(".py", "")}',
+        '--hidden-import=TCYNBTeditor',
         add_data_str.strip(), # 添加数据文件参数
         MAIN_SCRIPT
     ]
@@ -67,6 +105,10 @@ def main():
         os.remove(f"{EXE_NAME}.spec")
     if os.path.exists("build"):
         shutil.rmtree("build")
+
+    removed_after = clean_dist_release_residue()
+    if removed_after:
+        print(f"🧽 已清理本次构建产生的运行时残留：{len(removed_after)} 项")
 
     if exit_code == 0:
         print("\n🎉🎉🎉 构建成功！")
