@@ -1,6 +1,6 @@
 # TCY Client Updater (原 TCYServer_MCUpdater)
 
-![Version](https://img.shields.io/badge/version-1.0.6-blue) ![Author](https://img.shields.io/badge/author-KanameMadoka520-purple)
+![Version](https://img.shields.io/badge/version-1.0.7-blue) ![Author](https://img.shields.io/badge/author-KanameMadoka520-purple)
 ![Author](https://img.shields.io/badge/author-LainElaina-purple)
 [![License](https://img.shields.io/badge/license-CC%20BY--NC--SA%204.0-green)](https://github.com/KanameMadoka520/TCY-Client-Updater/blob/main/LICENSE)
 
@@ -79,7 +79,7 @@ https://tcymc.space
 
 ### 4. 双轨版本控制机制
 
-* **启动器自更新**: 支持语义化版本（如 `1.0.6`），采用 UTF-8 批处理脚本，**自适应保留用户重命名后的文件名**（即使是包含 Emoji 的怪异名字）。
+* **启动器自更新**: 支持语义化版本（如 `1.0.7`），采用 UTF-8 批处理脚本，**自适应保留用户重命名后的文件名**（即使是包含 Emoji 的怪异名字）。
 * **内容更新**: 采用时间戳版本（如 `26.02.06.15.53`），支持增量更新与可选内容的"补票"机制。
 
 ### 5. 高分屏适配与配置持久化
@@ -211,7 +211,7 @@ https://tcymc.space
 * **严重级别颜色**: `error`（红色）、`warning`（橙色）、`info`（蓝色）。
 * **容错设计**: 规则文件不存在或格式错误时，模组列表正常显示，不会报错。
 
-### 🗂️ 存档管理与 NBT 编辑器 (v1.0.6 新增)
+### 🗂️ 存档管理与 NBT 编辑器 (v1.0.7 新增)
 
 在更新器中直接管理 Minecraft 存档，并通过独立窗口编辑任意 `.dat` / `.dat_old` NBT 文件：
 
@@ -285,7 +285,7 @@ https://tcymc.space
     * 主程序通过 `from TCYNBTeditor import NbtIO, open_nbt_editor` 导入，存档列表解析 `level.dat` 时复用 `NbtIO.read()`。
     * `build.py` 将 `TCYNBTeditor.html` 打入 EXE（`ADDED_DATA`），并通过 `--hidden-import=TCYNBTeditor` 确保 PyInstaller 包含 Python 模块。
 
-### 🌐 服务器状态 / 内置浏览器 (v1.0.6 新增)
+### 🌐 服务器状态 / 内置浏览器 (v1.0.7 新增)
 
 无需打开外部浏览器，直接在更新器内查看服务器各线路状态，同时可作为轻量内置浏览器浏览任意网页：
 
@@ -310,7 +310,7 @@ https://tcymc.space
 * **主动关闭**:
     * 提供"关闭内置网页服务"按钮，可随时手动停止反向代理。关闭后可一键重新启动。
 
-### 🔍 Crash Log 智能分析器 (v1.0.6 新增)
+### 🔍 Crash Log 智能分析器 (v1.0.7 新增)
 
 玩家遇到游戏崩溃时，可在更新器中自动加载崩溃日志，通过本地规则引擎快速定位可疑 mod，并可选接入 AI 获得更深入的分析建议：
 
@@ -321,7 +321,7 @@ https://tcymc.space
 * **一键操作**：本地分析结果提供"禁用可疑 mod"、"跳转依赖视图"等快捷操作按钮。
 * **AI 设置**：设置页面新增 AI 配置卡片（API URL、API Key、模型名称），配置保存在 `launcher_settings.json`。
 
-### 📦 Mod 下载中心 — Modrinth (v1.0.6 新增)
+### 📦 Mod 下载中心 — Modrinth (v1.0.7 新增)
 
 直接在更新器中搜索、浏览并下载 Modrinth 上的 Mod，无需打开浏览器：
 
@@ -439,7 +439,7 @@ https://tcymc.space
 
 ```text
 您的游戏整合包文件夹 (名称可自定义)/
-├── TCYClientUpdater-1.0.6.exe           <-- 【关键】必须放在这里，与 .minecraft 同级
+├── TCYClientUpdater-1.0.7.exe           <-- 【关键】必须放在这里，与 .minecraft 同级
 ├── launcher_settings.json           <-- (自动生成) 配置文件
 ├── launcher_debug.log               <-- (自动生成) 运行日志
 ├── conflict_rules.json              <-- (可选) 冲突规则文件，v1.0.5 新增
@@ -652,7 +652,7 @@ pip install pywebview pyinstaller
 
 1. **修改程序名称**
 
-* 找到：`EXE_NAME = "TCYClientUpdater-1.0.6"`
+* 找到：`EXE_NAME = "TCYClientUpdater-1.0.7"`
 * **要做的事**: 改成你想要的程序名字，比如 `"终末地客户端更新器"`。
 
 2. **额外数据文件 (v1.0.5 新增)**
@@ -693,7 +693,7 @@ pip install pywebview pyinstaller
 
 ```json
 {
-  "version": "1.0.6",
+  "version": "1.0.7",
   "desc": "更新器自我升级：修复了闪退问题",
   "url": "https://你的网站/download/NewUpdater.exe"
 }
@@ -777,14 +777,14 @@ python build.py
 * **冲突规则不生效** (v1.0.5 新增):
 * 确认 `conflict_rules.json` 放在更新器 EXE 同目录下（与 `launcher_settings.json` 同级）。
 * 确认规则中的 `mods` 数组使用的是 mod 的 `id`（来自 `fabric.mod.json` 或 `mods.toml`），而非文件名。
-* **NBT 编辑器窗口打不开** (v1.0.6 新增):
+* **NBT 编辑器窗口打不开** (v1.0.7 新增):
 * 检查 `TCYNBTeditor.html` 是否在打包目录中。如果使用源码运行（`python TCYServer_MCUpdater.py`），确保 `TCYNBTeditor.html` 和 `TCYNBTeditor.py` 在同级目录。
 * 如果使用打包后的 EXE，确保 `build.py` 的 `ADDED_DATA` 包含 `("TCYNBTeditor.html", ".")` 且 `--hidden-import=TCYNBTeditor` 已添加。
-* **NBT 文件解析失败** (v1.0.6 新增):
+* **NBT 文件解析失败** (v1.0.7 新增):
 * `NbtIO` 仅支持 Java 版 NBT 格式（big-endian），不支持基岩版 NBT（little-endian）。
 * 仅支持 `.dat` 和 `.dat_old` 后缀的文件。
 * 支持 gzip 压缩和未压缩两种格式（自动检测）。
-* **服务器状态页面加载失败** (v1.0.6 新增):
+* **服务器状态页面加载失败** (v1.0.7 新增):
 * 本功能依赖本地反向代理。如果显示"反向代理启动失败"，检查是否有防火墙/安全软件阻止了本地端口监听。
 * 反向代理仅监听 `127.0.0.1`（本机回环地址），不对外网开放，不存在安全风险。
 * 如果加载缓慢，这与 `server.tcymc.space` 的网络延迟有关，可尝试刷新或使用"打开独立窗口"/"在浏览器中打开"作为替代方案。
@@ -817,7 +817,7 @@ python build.py
 
 ## 🗓️ 更新日志 (Changelog)
 
-### v1.0.6 (2026-03-13)
+### v1.0.7 (2026-03-13)
 
 * **系统概览（Phase 19，2026-03-14 后续实现）**:
   * 新增“系统概览”页面，展示机器概况（OS / CPU / 线程数 / 总内存 / 可用内存 / 磁盘剩余空间）和客户端概况（游戏目录 / 本地版本 / 客户端当前使用的 Java / Mod 数量 / 存档数量 / 截图数量）。
@@ -953,7 +953,7 @@ python build.py
 
 ## 🔮 未来计划
 
-### v1.0.6 已落地主体功能（客户端管家）
+### v1.0.7 已落地主体功能（客户端管家）
 
 * ~~**存档管理与 NBT 编辑器**~~：✅ 三批功能全部完成 — 存档列表管理 + 自研 NbtIO 解析器 + 独立窗口 NBT 编辑器（VSCode 风格布局、虚拟滚动、搜索、全类型编辑、大纲面板、缩放、撤销/重做、剪切/复制/粘贴、右键菜单、SNBT 复制、查找替换、另存为、拖拽排序、多标签页、数组 hex 视图、.mca 区域文件、JSON 导出/导入、拖拽文件打开）。现在主程序导航中已整合为“存档管理/NBT编辑”，支持从存档卡片打开对应世界的 NBT 编辑器，也支持在存档页顶部单独打开空白 NBT 编辑器工作台，并提示“请拖入nbt文件或nbt文件夹，以读取目录或读取文件进行编辑”。
 * **NBT 编辑器已完成全部路线图**（对标 NBT Studio，详见 [NBTEditor-DevGuide.md](NBTEditor-DevGuide.md)）：

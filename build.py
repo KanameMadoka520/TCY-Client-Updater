@@ -8,7 +8,7 @@ import glob
 ICON_FILE = "icon.ico"            
 MAIN_SCRIPT = "TCYServer_MCUpdater.py" 
 ASSET_FILE = "tcy_assets.py"
-EXE_NAME = "TCYClientUpdater-1.0.6"
+EXE_NAME = "TCYClientUpdater-1.0.7"
 DIST_DIR = "dist"
 # 新增：指定要包含的额外文件
 # 格式：("源文件", "目标路径")，目标路径 "." 表示根目录

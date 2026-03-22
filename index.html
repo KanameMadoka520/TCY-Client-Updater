@@ -2627,27 +2627,31 @@
 
             <div class="card">
                 <h3 style="margin-top:0">网络设置</h3>
+                <div id="network-policy-summary" style="margin-bottom:14px; padding:10px 12px; border-radius:8px; background:rgba(0,0,0,0.035); font-size:12px; line-height:1.7;">
+                    <div style="opacity:0.6;">网络策略摘要加载中...</div>
+                </div>
                 <div class="control-group">
                     <span class="control-label">GitHub 镜像加速前缀 (CN通道)</span>
                     <input type="text" id="mirror-prefix-input" placeholder="本软件默认为: https://gh-proxy.org/ 如果效果不好请找其他加速前缀"
-                        onchange="updateSettingsFromUI()">
+                        onchange="updateSettingsFromUI(); refreshNetworkDiagnosticsUI()">
                     <div style="font-size:12px; margin-top:5px; opacity:0.7">
                         用于加速 GitHub 文件下载。推荐前缀可访问：<a href="#" onclick="openUrl('https://gh-proxy.com/')"
                             style="color:var(--accent-color)">gh-proxy.com</a>
                     </div>
                     <div style="font-size:12px; margin-top:8px; opacity:0.75; line-height:1.8;">
                         以下为对中国境内友好的常用镜像加速源，点击即可填入：
-                        <div style="display:flex; flex-wrap:wrap; gap:6px; margin-top:6px;">
-                            <span class="btn small outline" style="font-size:11px; padding:3px 8px;" onclick="applyMirrorPrefix('https://gh-proxy.org/')">gh-proxy.org</span>
-                            <span class="btn small outline" style="font-size:11px; padding:3px 8px;" onclick="applyMirrorPrefix('https://ghproxy.cc/')">ghproxy.cc</span>
-                            <span class="btn small outline" style="font-size:11px; padding:3px 8px;" onclick="applyMirrorPrefix('https://ghproxy.net/')">ghproxy.net</span>
-                            <span class="btn small outline" style="font-size:11px; padding:3px 8px;" onclick="applyMirrorPrefix('https://github.moeyy.xyz/')">moeyy.xyz</span>
-                            <span class="btn small outline" style="font-size:11px; padding:3px 8px;" onclick="applyMirrorPrefix('https://ghps.cc/')">ghps.cc</span>
-                            <span class="btn small outline" style="font-size:11px; padding:3px 8px;" onclick="applyMirrorPrefix('https://gh.ddlc.top/')">gh.ddlc.top</span>
+                        <div id="mirror-preset-buttons" style="display:flex; flex-wrap:wrap; gap:6px; margin-top:6px;">
+                            <span style="opacity:0.5;">（加载中...）</span>
                         </div>
                     </div>
                     <div style="margin-top:12px;">
-                        <button class="btn outline small" onclick="pywebview.api.test_mirror_speeds()" id="mirror-speed-btn">测试镜像速度</button>
+                        <button class="btn outline small" onclick="startMirrorSpeedTest()" id="mirror-speed-btn">测试镜像速度</button>
+                        <div style="margin-top:6px; font-size:11px; opacity:0.68;">
+                            测速方式：对现有 GitHub 发布地址 `latest.json` 发起 `HEAD` 请求，不需要额外提供独立测速文件。
+                        </div>
+                        <div id="mirror-speed-status" style="margin-top:6px; font-size:12px; opacity:0.8;">
+                            <span style="color:#64748b;">状态：未开始</span>
+                        </div>
                         <div id="mirror-speed-results" style="margin-top:8px; font-size:12px;"></div>
                     </div>
                 </div>
@@ -2679,6 +2683,9 @@
                     <div style="font-size:12px; font-weight:bold; margin-bottom:6px; opacity:0.8;">更新器版本 JSON (Updater-latest.json) 轮询地址：</div>
                     <div id="updater-url-list" style="font-size:11px; font-family:'Consolas',monospace; background:rgba(0,0,0,0.04); border-radius:6px; padding:8px 10px; line-height:2;">
                         <div style="opacity:0.5;">（加载中...）</div>
+                    </div>
+                    <div style="font-size:11px; margin-top:6px; opacity:0.72;">
+                        SSL 标签说明：<strong>strict</strong> = 严格校验证书，<strong>compat</strong> = 镜像兼容模式。
                     </div>
                 </div>
 
@@ -2735,6 +2742,19 @@
                         <input type="checkbox" id="auto-mirror-check" onchange="updateSettingsFromUI()" checked style="width:16px; height:16px; accent-color:var(--accent-color);">
                         <span style="font-size:13px;">启动时自动测速并选择延迟最低的镜像</span>
                     </label>
+                </div>
+
+                <div class="control-group">
+                    <span class="control-label">镜像 SSL 兼容模式</span>
+                    <label style="display:flex; align-items:flex-start; gap:8px; cursor:pointer;">
+                        <input type="checkbox" id="mirror-ssl-compat-check" onchange="updateSettingsFromUI(); refreshNetworkDiagnosticsUI()" checked style="width:16px; height:16px; margin-top:2px; accent-color:var(--accent-color);">
+                        <span style="font-size:13px; line-height:1.6;">
+                            仅对镜像地址放宽证书校验。关闭后，镜像证书异常会直接失败；官方源和 Modrinth 始终严格校验。
+                        </span>
+                    </label>
+                    <div style="font-size:12px; margin-top:6px; opacity:0.72;">
+                        建议默认保持开启。只有当你确认所用镜像证书稳定、希望强制严格校验时，再手动关闭。
+                    </div>
                 </div>
             </div>
 
@@ -3481,7 +3501,9 @@
     <script src="jvm_advisor.js"></script>
     <script src="system_overview.js"></script>
     <script>
-        let currentSettings = { bg_type: 'default', custom_bg_data: '', visual_effect: 'glass', mask_opacity: 40, blur_radius: 0, text_color: '#333333', accent_color: '#f59e0b', bg_mode: 'cover', font_family: "'Segoe UI', system-ui, sans-serif", mirror_prefix: "https://gh-proxy.org/", custom_latest_url: "", custom_updater_url: "", max_backups: 1, parallel_downloads: 3, auto_select_mirror: true, jvm_profile: 'medium', jvm_subpage: 'overview', jvm_template: 'custom', mc_version: '1.20.1', loader: 'forge', modpack_scale: 'medium', cpu_tier: 'mainstream', is_x3d: false, preferred_java_version: 'auto' };
+        let defaultMirrorPrefix = "https://gh-proxy.org/";
+        let mirrorCatalog = [];
+        let currentSettings = { bg_type: 'default', custom_bg_data: '', visual_effect: 'glass', mask_opacity: 40, blur_radius: 0, text_color: '#333333', accent_color: '#f59e0b', bg_mode: 'cover', font_family: "'Segoe UI', system-ui, sans-serif", mirror_prefix: defaultMirrorPrefix, custom_latest_url: "", custom_updater_url: "", max_backups: 1, parallel_downloads: 3, auto_select_mirror: true, allow_insecure_mirror_ssl: true, jvm_profile: 'medium', jvm_subpage: 'overview', jvm_template: 'custom', mc_version: '1.20.1', loader: 'forge', modpack_scale: 'medium', cpu_tier: 'mainstream', is_x3d: false, preferred_java_version: 'auto' };
         let screenshotState = {
             items: [],
             filteredItems: [],
@@ -3519,6 +3541,8 @@
         let pendingPlanToken = null;
         let pendingSelection = null;
         let pendingSource = null;
+        let lastMirrorSpeedResults = [];
+        let mirrorSpeedState = 'idle';
 
         function initApp(data) {
             // 1. 基础文本信息显示
@@ -3529,6 +3553,19 @@
             }
             if (data.launcherVersion) {
                 document.getElementById('launcher-ver-display').innerText = data.launcherVersion;
+            }
+
+            if (Array.isArray(data.mirrorCatalog)) {
+                mirrorCatalog = data.mirrorCatalog.filter(item => item && item.url);
+            }
+            if (data.defaultMirrorPrefix) {
+                defaultMirrorPrefix = data.defaultMirrorPrefix;
+            } else if (mirrorCatalog.length > 0 && mirrorCatalog[0].url) {
+                defaultMirrorPrefix = mirrorCatalog[0].url;
+            }
+            const mirrorInput = document.getElementById('mirror-prefix-input');
+            if (mirrorInput) {
+                mirrorInput.placeholder = `本软件默认为: ${defaultMirrorPrefix} 如果效果不好请找其他加速前缀`;
             }
 
             // 2. 将后端传来的设置合并到当前变量
@@ -3567,6 +3604,8 @@
             // 如果不填回去，updateSettingsFromUI 会读到空字符串，从而清空用户的加速源配置
             if (currentSettings.mirror_prefix) {
                 document.getElementById('mirror-prefix-input').value = currentSettings.mirror_prefix;
+            } else {
+                document.getElementById('mirror-prefix-input').value = defaultMirrorPrefix;
             }
 
             // D. 回显自定义更新源 URL 输入框
@@ -3607,6 +3646,10 @@
             if (currentSettings.auto_select_mirror !== undefined) {
                 const amCheck = document.getElementById('auto-mirror-check');
                 if (amCheck) amCheck.checked = currentSettings.auto_select_mirror;
+            }
+            if (currentSettings.allow_insecure_mirror_ssl !== undefined) {
+                const sslCompatCheck = document.getElementById('mirror-ssl-compat-check');
+                if (sslCompatCheck) sslCompatCheck.checked = currentSettings.allow_insecure_mirror_ssl;
             }
             if (currentSettings.jvm_profile || currentSettings.modpack_scale) {
                 const legacyMap = { vanilla: 'light', medium: 'medium', large: 'large' };
@@ -3659,6 +3702,7 @@
             refreshVersions();
 
             // 7. 渲染轮询地址列表
+            renderMirrorPresetButtons();
             refreshUrlLists();
 
             // 8. 初始化 config 备份管理 UI
@@ -5473,6 +5517,7 @@
             const maxBackups = parseInt(document.getElementById('max-backups-select').value);
             const parallelDownloads = parseInt(document.getElementById('parallel-downloads-select').value);
             const autoMirror = document.getElementById('auto-mirror-check').checked;
+            const allowInsecureMirrorSsl = document.getElementById('mirror-ssl-compat-check').checked;
 
             document.getElementById('mask-opacity-val').innerText = opacity + '%';
             document.getElementById('blur-radius-val').innerText = blur + 'px';
@@ -5555,6 +5600,7 @@
             currentSettings.max_backups = maxBackups;
             currentSettings.parallel_downloads = parallelDownloads;
             currentSettings.auto_select_mirror = autoMirror;
+            currentSettings.allow_insecure_mirror_ssl = allowInsecureMirrorSsl;
             currentSettings.ai_api_url = document.getElementById('ai-api-url')?.value.trim() || '';
             currentSettings.ai_api_key = document.getElementById('ai-api-key')?.value || '';
             currentSettings.ai_model = document.getElementById('ai-api-model')?.value.trim() || 'gpt-3.5-turbo';
@@ -5615,7 +5661,7 @@
                     text_color: '#333333', accent_color: '#f59e0b',
                     bg_mode: 'cover', font_family: "'Segoe UI', system-ui, sans-serif",
                     current_version: localVersion,
-                    mirror_prefix: "https://gh-proxy.org/",
+                    mirror_prefix: getDefaultMirrorPrefix(),
                     custom_latest_url: "",
                     custom_updater_url: "",
                     skipped_versions: preservedSkipped,
@@ -5623,6 +5669,7 @@
                     max_backups: 1,
                     parallel_downloads: 3,
                     auto_select_mirror: true,
+                    allow_insecure_mirror_ssl: true,
                     jvm_profile: 'medium',
                     jvm_subpage: 'overview',
                     jvm_template: 'custom',
@@ -5638,12 +5685,13 @@
                 document.getElementById('blur-radius-range').value = 0;
                 document.getElementById('bg-mode-select').value = 'cover';
                 document.getElementById('font-select').value = "'Segoe UI', system-ui, sans-serif";
-                document.getElementById('mirror-prefix-input').value = "https://gh-proxy.org/";
+                document.getElementById('mirror-prefix-input').value = getDefaultMirrorPrefix();
                 document.getElementById('custom-latest-url-input').value = "";
                 document.getElementById('custom-updater-url-input').value = "";
                 document.getElementById('max-backups-select').value = "1";
                 document.getElementById('parallel-downloads-select').value = "3";
                 document.getElementById('auto-mirror-check').checked = true;
+                document.getElementById('mirror-ssl-compat-check').checked = true;
                 if (document.getElementById('jvm-scene-template')) document.getElementById('jvm-scene-template').value = 'custom';
                 if (document.getElementById('jvm-mc-version')) document.getElementById('jvm-mc-version').value = '1.20.1';
                 if (document.getElementById('jvm-loader')) document.getElementById('jvm-loader').value = 'forge';
@@ -5653,6 +5701,7 @@
                 if (document.getElementById('jvm-is-x3d')) document.getElementById('jvm-is-x3d').checked = false;
                 restoreDefaultBg();
                 updateSettingsFromUI();
+                refreshNetworkDiagnosticsUI();
             }
         }
 
@@ -5667,7 +5716,7 @@
                 document.getElementById('custom-latest-url-input').value = "";
                 document.getElementById('custom-updater-url-input').value = "";
                 saveSettingsDebounced();
-                refreshUrlLists();
+                refreshNetworkDiagnosticsUI();
             }
         }
 
@@ -5676,27 +5725,100 @@
             document.getElementById('mirror-prefix-input').value = prefix;
             currentSettings.mirror_prefix = prefix;
             saveSettingsDebounced();
-            refreshUrlLists();
+            refreshNetworkDiagnosticsUI();
+        }
+
+        function applyMirrorPrefixFromBackend(prefix) {
+            document.getElementById('mirror-prefix-input').value = prefix;
+            currentSettings.mirror_prefix = prefix;
+            refreshNetworkDiagnosticsUI();
+        }
+
+        function setMirrorSpeedTestState(state, message) {
+            mirrorSpeedState = state || 'idle';
+            const btn = document.getElementById('mirror-speed-btn');
+            const status = document.getElementById('mirror-speed-status');
+            const text = message || '';
+
+            if (btn) {
+                const isRunning = mirrorSpeedState === 'running';
+                btn.disabled = isRunning;
+                btn.style.opacity = isRunning ? '0.6' : '1';
+                btn.style.cursor = isRunning ? 'not-allowed' : '';
+            }
+
+            if (!status) return;
+
+            let color = '#64748b';
+            let label = '状态：未开始';
+            if (mirrorSpeedState === 'running') {
+                color = '#2563eb';
+                label = `状态：测速中${text ? ' - ' + text : ''}`;
+            } else if (mirrorSpeedState === 'success') {
+                color = '#0f766e';
+                label = `状态：已完成${text ? ' - ' + text : ''}`;
+            } else if (mirrorSpeedState === 'failed') {
+                color = '#dc2626';
+                label = `状态：失败${text ? ' - ' + text : ''}`;
+            }
+
+            status.innerHTML = `<span style="color:${color};">${label}</span>`;
+        }
+
+        async function startMirrorSpeedTest() {
+            const results = document.getElementById('mirror-speed-results');
+            lastMirrorSpeedResults = [];
+            if (results) {
+                results.innerHTML = '<div style="opacity:0.55;">测速中：正在并发请求各镜像...</div>';
+            }
+            setMirrorSpeedTestState('running', '并发请求中');
+            try {
+                await pywebview.api.test_mirror_speeds();
+            } catch (e) {
+                setMirrorSpeedTestState('failed', '测速启动失败');
+            }
         }
 
         // === 镜像测速结果展示 ===
         function showMirrorSpeedResults(results) {
             const container = document.getElementById('mirror-speed-results');
+            lastMirrorSpeedResults = Array.isArray(results) ? results : [];
             if (!results || results.length === 0) {
                 container.innerHTML = '<div style="opacity:0.5;">无结果</div>';
+                setMirrorSpeedTestState('failed', '未返回结果');
                 return;
             }
             container.innerHTML = results.map(r => {
                 const icon = r.ok ? '\u2705' : '\u274c';
-                const latency = r.ok ? r.latency + 'ms' : '\u8d85\u65f6';
-                const color = r.ok ? (r.latency < 500 ? '#10b981' : r.latency < 1000 ? '#f59e0b' : '#ef4444') : '#ef4444';
-                const isSelected = document.getElementById('mirror-prefix-input').value === r.mirror;
+                const latency = r.ok ? r.latency + 'ms' : (r.error ? '失败' : '\u8d85\u65f6');
+                const statusClass = r.status_class || (r.ok ? 'good' : 'down');
+                const color = statusClass === 'good'
+                    ? '#10b981'
+                    : statusClass === 'warn'
+                        ? '#f59e0b'
+                        : '#ef4444';
+                const isSelected = !!r.selected;
                 const selectedTag = isSelected ? ' <span style="color:var(--accent-color); font-weight:600;">[\u5f53\u524d]</span>' : '';
+                const sslMode = r.ssl_mode || getUrlSslMode(r.mirror);
+                let sslTag = '';
+                if (sslMode === 'strict') {
+                    sslTag = ' <span style="color:#0f766e; font-size:10px;">[SSL:strict]</span>';
+                } else if (sslMode === 'compat') {
+                    sslTag = ' <span style="color:#b45309; font-size:10px;">[SSL:compat]</span>';
+                }
                 return '<div style="display:flex; justify-content:space-between; align-items:center; padding:4px 0;">' +
-                    '<span>' + icon + ' ' + r.mirror + selectedTag + '</span>' +
+                    '<span>' + icon + ' ' + (r.label || r.mirror) + selectedTag + sslTag + '</span>' +
                     '<span style="color:' + color + '; font-weight:600;">' + latency + '</span>' +
                 '</div>';
             }).join('');
+
+            const okCount = results.filter(r => r.ok).length;
+            const total = results.length;
+            if (okCount > 0) {
+                setMirrorSpeedTestState('success', `${okCount}/${total} 可用`);
+            } else {
+                setMirrorSpeedTestState('failed', `0/${total} 可用`);
+            }
         }
 
         async function copyText(text) {
@@ -5753,8 +5875,123 @@
             return [...new Map(urls.map(u => [u, u])).values()];
         }
 
+        function getDefaultMirrorPrefix() {
+            if (defaultMirrorPrefix) return defaultMirrorPrefix;
+            if (Array.isArray(mirrorCatalog) && mirrorCatalog.length > 0 && mirrorCatalog[0].url) {
+                return mirrorCatalog[0].url;
+            }
+            return "https://gh-proxy.org/";
+        }
+
+        function getUrlHostname(rawUrl) {
+            try {
+                return new URL(rawUrl).hostname.toLowerCase();
+            } catch (e) {
+                return '';
+            }
+        }
+
+        function getKnownMirrorHosts() {
+            return new Set(
+                (Array.isArray(mirrorCatalog) ? mirrorCatalog : [])
+                    .map(item => getUrlHostname(item.url))
+                    .filter(Boolean)
+            );
+        }
+
+        function getUrlSslMode(rawUrl) {
+            let protocol = '';
+            try {
+                protocol = new URL(rawUrl).protocol.toLowerCase();
+            } catch (e) {
+                return 'unknown';
+            }
+
+            if (protocol !== 'https:') {
+                return 'none';
+            }
+
+            const host = getUrlHostname(rawUrl);
+            const mirrorHost = getUrlHostname((currentSettings.mirror_prefix || '').trim());
+            const allowCompat = !!currentSettings.allow_insecure_mirror_ssl;
+            const knownMirrorHosts = getKnownMirrorHosts();
+
+            if (allowCompat && host && (host === mirrorHost || knownMirrorHosts.has(host))) {
+                return 'compat';
+            }
+            return 'strict';
+        }
+
+        function renderMirrorPresetButtons() {
+            const container = document.getElementById('mirror-preset-buttons');
+            if (!container) return;
+
+            if (!Array.isArray(mirrorCatalog) || mirrorCatalog.length === 0) {
+                container.innerHTML = '<span style="opacity:0.5;">（暂无镜像数据）</span>';
+                return;
+            }
+
+            const currentPrefix = (currentSettings.mirror_prefix || '').trim();
+            container.innerHTML = mirrorCatalog.map(item => {
+                const label = item.label || item.url;
+                const url = item.url || '';
+                const isActive = currentPrefix === url;
+                const activeStyle = isActive
+                    ? ' background:rgba(245,158,11,0.12); border-color:rgba(245,158,11,0.45); color:var(--accent-color);'
+                    : '';
+                return `<span class="btn small outline" style="font-size:11px; padding:3px 8px;${activeStyle}" onclick="applyMirrorPrefix(${JSON.stringify(url)})">${label}</span>`;
+            }).join('');
+        }
+
+        function getSslModeBadge(mode) {
+            if (mode === 'compat') {
+                return '<span style="color:#b45309; font-size:11px; font-weight:600;">compat</span>';
+            }
+            if (mode === 'strict') {
+                return '<span style="color:#0f766e; font-size:11px; font-weight:600;">strict</span>';
+            }
+            if (mode === 'none') {
+                return '<span style="color:#64748b; font-size:11px; font-weight:600;">none</span>';
+            }
+            return '<span style="color:#64748b; font-size:11px; font-weight:600;">unknown</span>';
+        }
+
+        function renderNetworkPolicySummary() {
+            const container = document.getElementById('network-policy-summary');
+            if (!container) return;
+
+            const mirrorPrefix = (currentSettings.mirror_prefix || getDefaultMirrorPrefix()).trim();
+            const mirrorHost = getUrlHostname(mirrorPrefix) || '未设置';
+            const officialMode = getUrlSslMode(DEFAULT_LATEST_URL);
+            const mirrorMode = mirrorHost === '未设置' ? 'unknown' : getUrlSslMode(mirrorPrefix);
+            const customCount = [
+                (currentSettings.custom_latest_url || '').trim(),
+                (currentSettings.custom_updater_url || '').trim()
+            ].filter(Boolean).length;
+
+            let customText = '未启用';
+            if (customCount === 1) customText = '已启用 1 个';
+            if (customCount >= 2) customText = `已启用 ${customCount} 个`;
+
+            container.innerHTML =
+                '<div style="font-weight:600; margin-bottom:4px;">当前网络策略摘要</div>' +
+                '<div>官方源 SSL: ' + getSslModeBadge(officialMode) +
+                ' ｜ 镜像 SSL: ' + getSslModeBadge(mirrorMode) +
+                ' ｜ 当前镜像前缀: <span style="font-family:Consolas,monospace;">' + mirrorHost + '</span></div>' +
+                '<div style="opacity:0.74;">自定义更新源: ' + customText + '。镜像 SSL 兼容模式当前' +
+                (currentSettings.allow_insecure_mirror_ssl ? '开启' : '关闭') + '。</div>';
+        }
+
+        function refreshNetworkDiagnosticsUI() {
+            renderNetworkPolicySummary();
+            refreshUrlLists();
+            if (Array.isArray(lastMirrorSpeedResults) && lastMirrorSpeedResults.length > 0) {
+                showMirrorSpeedResults(lastMirrorSpeedResults);
+            }
+        }
+
         function refreshUrlLists() {
-            const mirror = (currentSettings.mirror_prefix || "https://gh-proxy.org/").trim();
+            const mirror = (currentSettings.mirror_prefix || getDefaultMirrorPrefix()).trim();
             const customLatest = (currentSettings.custom_latest_url || "").trim();
             const customUpdater = (currentSettings.custom_updater_url || "").trim();
 
@@ -5768,7 +6005,18 @@
                     else if (u === DEFAULT_LATEST_URL || u === DEFAULT_UPDATER_URL) tag = ' <span style="color:#64748b; font-size:10px;">[官网默认]</span>';
                     else if (u === GITHUB_LATEST_URL || u === GITHUB_UPDATER_URL) tag = ' <span style="color:#6366f1; font-size:10px;">[GitHub]</span>';
                     else tag = ' <span style="color:#10b981; font-size:10px;">[GitHub+加速]</span>';
-                    return `<div>${i + 1}. ${u}${tag}</div>`;
+
+                    const sslMode = getUrlSslMode(u);
+                    let sslTag = '';
+                    if (sslMode === 'strict') {
+                        sslTag = ' <span style="color:#0f766e; font-size:10px;">[SSL:strict]</span>';
+                    } else if (sslMode === 'compat') {
+                        sslTag = ' <span style="color:#b45309; font-size:10px;">[SSL:compat]</span>';
+                    } else if (sslMode === 'none') {
+                        sslTag = ' <span style="color:#64748b; font-size:10px;">[SSL:none]</span>';
+                    }
+
+                    return `<div>${i + 1}. ${u}${tag}${sslTag}</div>`;
                 }).join('');
             }
 
@@ -5781,6 +6029,7 @@
         let _pendingClientPayloadAfterUpdater = null;
         let _updateIslandAction = '';
         let _updateIslandLastText = '';
+        let _clientUpdateUiDetached = false;
 
         function animateUpdateIsland() {
             const island = document.getElementById('update-island');
@@ -5825,7 +6074,7 @@
             }
         }
 
-        function showUpdateIslandLoading() {
+        function showUpdateIslandLoading(message) {
             const island = document.getElementById('update-island');
             const spinner = document.getElementById('update-island-spinner');
             const text = document.getElementById('update-island-text');
@@ -5833,7 +6082,7 @@
             _updateIslandAction = '';
             island.classList.remove('clickable');
             spinner.style.display = '';
-            setUpdateIslandMessage('正在检查更新…');
+            setUpdateIslandMessage(message || '正在检查更新…');
             animateUpdateIsland();
         }
 
@@ -5905,7 +6154,10 @@
                 return;
             }
 
-            const text = `新版本：${pendingUpdaterInfo.remote_ver}\n更新内容：${pendingUpdaterInfo.desc || '无'}`;
+            let text = `新版本：${pendingUpdaterInfo.remote_ver}\n更新内容：${pendingUpdaterInfo.desc || '无'}`;
+            if (_pendingClientPayloadAfterUpdater && Array.isArray(_pendingClientPayloadAfterUpdater.updates) && _pendingClientPayloadAfterUpdater.updates.length > 0) {
+                text += `\n\n提示：如果现在先更新更新器，本次不会继续客户端更新。请等待更新器重启完成后，再重新检查客户端更新。`;
+            }
             document.getElementById('updater-modal-text').innerText = text;
             document.getElementById('updater-modal').style.display = 'flex';
         }
@@ -5920,6 +6172,44 @@
             } else {
                 clearUpdateIsland();
             }
+        }
+
+        function closeUpdaterModalOnly() {
+            document.getElementById('updater-modal').style.display = 'none';
+            _pendingClientPayloadAfterUpdater = null;
+            pendingUpdaterInfo = null;
+            clearUpdateIsland();
+        }
+
+        function showClientUpdateIslandStatus(status, percent) {
+            const island = document.getElementById('update-island');
+            const spinner = document.getElementById('update-island-spinner');
+            const text = document.getElementById('update-island-text');
+            if (!island || !spinner) return;
+            _updateIslandAction = '';
+            island.classList.remove('clickable');
+            island.style.display = 'flex';
+            spinner.style.display = '';
+            const prefix = Number.isFinite(percent) ? `${percent}% · ` : '';
+            if (text) {
+                text.innerHTML = escapeHtml(`正在更新客户端：${prefix}${status || '处理中…'}`);
+                updateIslandWidth();
+                _updateIslandLastText = `client__${prefix}${status || '处理中…'}`;
+            }
+        }
+
+        function beginClientUpdateProgressMode() {
+            _clientUpdateUiDetached = true;
+            document.getElementById('updater-modal').style.display = 'none';
+            document.getElementById('update-modal').style.display = 'none';
+            showClientUpdateIslandStatus('准备中…');
+        }
+
+        function onClientUpdateFinished(message) {
+            _clientUpdateUiDetached = false;
+            document.getElementById('update-modal').style.display = 'none';
+            resetUpdateModalState();
+            hideUpdateIslandSoon(message || '客户端更新完成，请重启客户端。');
         }
 
         function setPendingVersionModal(payload) {
@@ -7804,9 +8094,15 @@
         function doUpdaterSelfUpdate() {
             if (!pendingUpdaterInfo) return;
             if (confirm(`确定要更新更新器到 ${pendingUpdaterInfo.remote_ver} 吗？\n\n更新内容：${pendingUpdaterInfo.desc}\n\n点击确定将自动下载并重启。`)) {
-                pywebview.api.perform_self_update(pendingUpdaterInfo.url, pendingUpdaterInfo.remote_ver);
+                const updaterInfo = pendingUpdaterInfo;
+                document.getElementById('updater-modal').style.display = 'none';
+                document.getElementById('update-modal').style.display = 'none';
+                _pendingClientPayloadAfterUpdater = null;
+                pendingUpdaterInfo = null;
+                showUpdateIslandLoading('正在更新更新器，请等待重启；完成后再更新客户端…');
+                pywebview.api.perform_self_update(updaterInfo.url, updaterInfo.remote_ver);
+                return;
             }
-            closeUpdaterModalAndContinue();
         }
 
         function dismissUpdaterInfo() {
@@ -7858,6 +8154,10 @@
             const btnClose = document.getElementById('btn-close-modal');
             if (btnClose) {
                 btnClose.style.display = 'inline-block';
+            }
+            if (_clientUpdateUiDetached) {
+                _clientUpdateUiDetached = false;
+                hideUpdateIslandSoon('客户端更新已取消');
             }
             setTimeout(() => {
                 closeUpdateModal();
@@ -7933,6 +8233,7 @@
             document.getElementById('update-preview-area').style.display = 'none';
             document.getElementById('btn-area').style.display = 'none';
             document.getElementById('progress-area').style.display = 'block';
+            beginClientUpdateProgressMode();
 
             pywebview.api.start_update_sequence_confirmed(
                 JSON.stringify(pendingSelection),
@@ -7941,6 +8242,8 @@
                 true
             ).then(ok => {
                 if (!ok) {
+                    _clientUpdateUiDetached = false;
+                    document.getElementById('update-modal').style.display = 'flex';
                     resetUpdateModalState();
                 }
             });
@@ -8013,6 +8316,9 @@
             document.getElementById('dl-percent').innerText = percent + '%';
             if (speed) document.getElementById('dl-speed-text').innerText = speed;
             if (status) document.getElementById('dl-status-text').innerText = status;
+            if (_clientUpdateUiDetached) {
+                showClientUpdateIslandStatus(status || '处理中…', percent);
+            }
             // 同步强制更新弹窗进度（如果打开着）
             const forceBar = document.getElementById('force-dl-bar');
             if (forceBar) {
@@ -8028,6 +8334,10 @@
             // data 格式: { percent, speed, downloaded, total, eta, files: [{name, percent, size, downloaded, state}] }
             document.getElementById('dl-bar').style.width = data.percent + '%';
             document.getElementById('dl-percent').innerText = data.percent + '%';
+            if (_clientUpdateUiDetached) {
+                const speedText = data.speed ? `下载中（${data.speed}）` : '下载中…';
+                showClientUpdateIslandStatus(speedText, data.percent);
+            }
             
             // 绿色状态：下载完成时
             if(data.percent >= 100) {
@@ -8102,6 +8412,9 @@
             document.getElementById('dl-bar').style.width = '100%';
             document.getElementById('dl-bar').style.background = '#10b981'; // green
             document.getElementById('dl-percent').innerText = '100%';
+            if (_clientUpdateUiDetached) {
+                showClientUpdateIslandStatus('正在应用更新…', 100);
+            }
         }
 
         function onUpdateFailed(errMessage) {
@@ -8119,6 +8432,12 @@
             
             const btnRetry = document.getElementById('btn-retry-update');
             if(btnRetry) btnRetry.style.display = 'inline-block';
+
+            if (_clientUpdateUiDetached) {
+                _clientUpdateUiDetached = false;
+                document.getElementById('update-modal').style.display = 'flex';
+                showUpdateIslandIdle('客户端更新失败，已重新打开详情窗口');
+            }
         }
         
         function retryUpdate() {

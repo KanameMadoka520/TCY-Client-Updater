@@ -37,7 +37,9 @@ import webbrowser
 from multiprocessing import freeze_support
 from TCYNBTeditor import NbtIO, open_nbt_editor, open_nbt_editor_empty
 from jvm_advisor import build_jvm_recommendation, normalize_jvm_advisor_settings, JAVA_VERSION_NOTES
+from mirror_catalog import DEFAULT_MIRROR_PREFIX, MIRROR_CATALOG, get_mirror_urls
 from system_overview import build_system_overview, get_available_memory_gb, get_disk_usage_for_path, get_windows_cpu_name, summarize_java_versions
+from updater_utils import bounded_worker_count, build_self_update_batch_script, build_url_list, classify_mirror_latency, collect_https_hosts, is_version_newer, resolve_relative_path, select_pending_updates, sort_versioned_items, ssl_mode_for_url, summarize_elapsed_ms, summarize_url_fetch_results, version_sort_key
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 # === 网络请求相关库 ===
@@ -63,9 +65,6 @@ WS_CAPTION = 0x00C00000     # 标题栏样式（我们需要移除它，防止�
 WM_SYSCOMMAND = 0x0112
 SC_SIZE = 0xF000
 
-# === 忽略 SSL 证书验证 (防止旧系统/内网报错) ===
-ssl._create_default_https_context = ssl._create_unverified_context
-
 # === 开启 GPU 加速 (注释掉禁用代码) ===
 # os.environ["WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS"] = "--disable-gpu --disable-d3d11 --disable-accelerated-video-decode"
 
@@ -86,6 +85,13 @@ logger.addHandler(_rfh)
 def log_info(msg): logger.info(msg)
 def log_error(msg): logger.error(msg)
 def log_warning(msg): logger.warning(msg)
+
+def flush_log_handlers():
+    for handler in logger.handlers:
+        try:
+            handler.flush()
+        except Exception:
+            pass
 
 try:
     import webview
@@ -110,7 +116,7 @@ CONFIG_FILE = "launcher_settings.json"
 # ===整合包初始版本 (客户端内容版本) ===
 INITIAL_VERSION = "26.02.06.15.24"
 # ===更新器自身版本 (传统版本号) ===
-LAUNCHER_INTERNAL_VERSION = "1.0.6"
+LAUNCHER_INTERNAL_VERSION = "1.0.7"
 
 # === 默认版本检查 JSON 地址 ===
 DEFAULT_LATEST_JSON_URL = "https://tcymc.space/update/latest.json"
@@ -120,14 +126,10 @@ DEFAULT_UPDATER_JSON_URL = "https://tcymc.space/update/Updater-latest.json"
 GITHUB_LATEST_JSON_URL = "https://github.com/KanameMadoka520/TCY-Client-Updater/releases/download/versions/latest.json"
 GITHUB_UPDATER_JSON_URL = "https://github.com/KanameMadoka520/TCY-Client-Updater/releases/download/versions/Updater-latest.json"
 
-MIRROR_LIST = [
-    "https://gh-proxy.org/",
-    "https://ghfast.top/",
-    "https://github.moeyy.xyz/",
-    "https://ghproxy.net/",
-    "https://cf.ghproxy.cc/",
-    "https://gh.llkk.cc/"
-]
+MIRROR_LIST = get_mirror_urls()
+
+JSON_FETCH_MAX_WORKERS = 4
+MIRROR_SPEED_MAX_WORKERS = 6
 
 global_window = None
 
@@ -150,7 +152,7 @@ class ConfigManager:
             "font_family": "'Segoe UI', system-ui, sans-serif",
             "current_version": INITIAL_VERSION,
             # ===自定义镜像前缀 ===
-            "mirror_prefix": "https://gh-proxy.org/",
+            "mirror_prefix": DEFAULT_MIRROR_PREFIX,
             # === 默认窗口大小 (宽x高) ===
             "window_size": "950x700",
             # ===跳过的可选版本记录 ===
@@ -165,6 +167,7 @@ class ConfigManager:
             "mod_presets": [],
             "mod_dep_ignores": {},
             "auto_select_mirror": True,
+            "allow_insecure_mirror_ssl": True,
             "mirror_speed_cache": {},
             "activity_log": [],
             "ai_api_url": "",
@@ -259,7 +262,7 @@ class Api:
                 candidates.append(u)
 
         if source_type == 'cn' and isinstance(original_url, str) and 'github.com' in original_url:
-            prefix = self.cfg_mgr.config.get("mirror_prefix", "https://gh-proxy.org/")
+            prefix = self.cfg_mgr.config.get("mirror_prefix", DEFAULT_MIRROR_PREFIX)
             mirrored = original_url
             if prefix and not original_url.startswith(prefix):
                 mirrored = prefix + original_url
@@ -270,12 +273,37 @@ class Api:
 
         return candidates
 
-    def _download_with_cancel(self, url, dest_path, progress_cb=None, connect_timeout=8, stall_timeout=15):
-        req = urllib.request.Request(url, headers={'User-Agent': 'TCYClientUpdater/1.0'})
-        context = ssl._create_unverified_context()
-        os.makedirs(os.path.dirname(dest_path), exist_ok=True)
+    def _get_insecure_ssl_hosts(self):
+        configured_mirror = self.cfg_mgr.config.get("mirror_prefix", DEFAULT_MIRROR_PREFIX).strip()
+        allow_insecure = bool(self.cfg_mgr.config.get("allow_insecure_mirror_ssl", True))
+        return collect_https_hosts(list(MIRROR_LIST) + [configured_mirror], enabled=allow_insecure)
 
-        with urllib.request.urlopen(req, timeout=connect_timeout, context=context) as resp:
+    def _get_ssl_context_for_url(self, url):
+        mode = ssl_mode_for_url(url, insecure_hosts=self._get_insecure_ssl_hosts())
+        if mode == "none":
+            return None, mode
+        if mode == "compat":
+            return ssl._create_unverified_context(), mode
+        return ssl.create_default_context(), mode
+
+    def _urlopen_with_policy(self, req, timeout, url=None):
+        target_url = url or getattr(req, "full_url", None) or getattr(req, "get_full_url", lambda: "")()
+        context, mode = self._get_ssl_context_for_url(target_url)
+        if mode == "strict":
+            log_info(f"SSL策略[strict]: {target_url}")
+        if mode == "compat":
+            log_warning(f"SSL策略[compat]: {target_url}")
+        if context is None:
+            return urllib.request.urlopen(req, timeout=timeout)
+        return urllib.request.urlopen(req, timeout=timeout, context=context)
+
+    def _download_url_to_path(self, url, dest_path, progress_cb=None, connect_timeout=8, stall_timeout=15, allow_cancel=False):
+        req = urllib.request.Request(url, headers={'User-Agent': 'TCYClientUpdater/1.0'})
+        dest_dir = os.path.dirname(dest_path)
+        if dest_dir:
+            os.makedirs(dest_dir, exist_ok=True)
+
+        with self._urlopen_with_policy(req, timeout=connect_timeout, url=url) as resp:
             total_size = resp.headers.get('Content-Length')
             try:
                 total_size = int(total_size) if total_size else -1
@@ -289,7 +317,7 @@ class Api:
 
             with open(dest_path, 'wb') as f:
                 while True:
-                    if self.cancel_event.is_set():
+                    if allow_cancel and self.cancel_event.is_set():
                         raise Exception("Update cancelled by user")
 
                     try:
@@ -311,6 +339,16 @@ class Api:
                     if progress_cb:
                         progress_cb(block_num, block_size, total_size if total_size > 0 else downloaded)
 
+    def _download_with_cancel(self, url, dest_path, progress_cb=None, connect_timeout=8, stall_timeout=15):
+        self._download_url_to_path(
+            url,
+            dest_path,
+            progress_cb=progress_cb,
+            connect_timeout=connect_timeout,
+            stall_timeout=stall_timeout,
+            allow_cancel=True,
+        )
+
     def _probe_resume_feasibility(self, url, connect_timeout=8):
         result = {
             "ok": False,
@@ -327,12 +365,10 @@ class Api:
         def add_reason(code, msg):
             result["reasons"].append({"code": code, "msg": msg})
 
-        context = ssl._create_unverified_context()
-
         # 1) HEAD probe
         try:
             req = urllib.request.Request(url, method='HEAD', headers={'User-Agent': 'TCYClientUpdater/1.0'})
-            with urllib.request.urlopen(req, timeout=connect_timeout, context=context) as resp:
+            with self._urlopen_with_policy(req, timeout=connect_timeout, url=url) as resp:
                 headers = resp.headers
                 result["status"] = getattr(resp, 'status', None)
                 result["via"] = "HEAD"
@@ -365,7 +401,7 @@ class Api:
                         'Range': 'bytes=0-0'
                     }
                 )
-                with urllib.request.urlopen(req, timeout=connect_timeout, context=context) as resp:
+                with self._urlopen_with_policy(req, timeout=connect_timeout, url=url) as resp:
                     result["status"] = getattr(resp, 'status', None)
                     result["via"] = "RANGE_GET"
                     content_range = resp.headers.get('Content-Range', '')
@@ -869,9 +905,8 @@ class Api:
                 'Range': f'bytes={local_size}-'
             }
         )
-        context = ssl._create_unverified_context()
 
-        with urllib.request.urlopen(req, timeout=connect_timeout, context=context) as resp:
+        with self._urlopen_with_policy(req, timeout=connect_timeout, url=url) as resp:
             status = getattr(resp, 'status', None)
             content_range = resp.headers.get('Content-Range', '')
             if status != 206 or f'bytes {local_size}-' not in content_range:
@@ -1080,7 +1115,9 @@ class Api:
                 "versionName": TARGET_VERSION_NAME, "bgImage": current_bg,
                 "settings": cfg, "detectedPath": target_path if os.path.exists(target_path) else "",
                 "localVersion": self.get_local_version(),
-                "launcherVersion": LAUNCHER_INTERNAL_VERSION
+                "launcherVersion": LAUNCHER_INTERNAL_VERSION,
+                "mirrorCatalog": MIRROR_CATALOG,
+                "defaultMirrorPrefix": DEFAULT_MIRROR_PREFIX,
             }
             if global_window: global_window.evaluate_js(f"initApp({json.dumps(init_data)})")
 
@@ -1150,6 +1187,9 @@ class Api:
         p2 = os.path.join(self.game_root, "versions", TARGET_VERSION_NAME)
         if os.path.exists(p2): return p2
         return p1
+
+    def _resolve_game_relative_path(self, sub_path, relative_path):
+        return resolve_relative_path(self._get_game_subdir(sub_path), relative_path)
 
     def _get_screenshots_dir(self):
         """获取截图目录的绝对路径"""
@@ -1932,6 +1972,16 @@ class Api:
     def _restore_backup(self, backup_dir):
         """从备份恢复文件"""
         game_dir = self._get_game_version_dir()
+        backup_root = os.path.realpath(self._get_backup_root())
+        backup_dir = os.path.realpath(backup_dir)
+        try:
+            if os.path.commonpath([backup_root, backup_dir]) != backup_root:
+                self.log("备份目录非法，无法回滚")
+                return False
+        except ValueError:
+            self.log("备份目录非法，无法回滚")
+            return False
+
         manifest_path = os.path.join(backup_dir, "_backup_manifest.json")
         if not os.path.exists(manifest_path):
             self.log("备份清单不存在，无法回滚")
@@ -1940,8 +1990,12 @@ class Api:
             manifest = json.load(f)
         restored = 0
         for rel_path in manifest.get("files", []):
-            src = os.path.join(backup_dir, rel_path)
-            dest = os.path.join(game_dir, rel_path)
+            try:
+                src = resolve_relative_path(backup_dir, rel_path)
+                dest = resolve_relative_path(game_dir, rel_path)
+            except ValueError as e:
+                log_error(f"跳过非法回滚路径 {rel_path}: {e}")
+                continue
             if os.path.exists(src):
                 os.makedirs(os.path.dirname(dest), exist_ok=True)
                 try:
@@ -1992,8 +2046,10 @@ class Api:
 
     def perform_rollback(self, dir_name):
         """执行手动回滚（供前端调用）"""
-        if ".." in dir_name: return False
-        backup_dir = os.path.join(self._get_backup_root(), dir_name)
+        try:
+            backup_dir = resolve_relative_path(self._get_backup_root(), dir_name)
+        except ValueError:
+            return False
         if not os.path.exists(backup_dir): return False
         success = self._restore_backup(backup_dir)
         if success:
@@ -2004,37 +2060,87 @@ class Api:
         """测试所有镜像延迟，后台线程执行"""
         threading.Thread(target=self._test_mirrors_thread).start()
 
+    def _probe_single_mirror_speed(self, mirror, test_url_path, label_by_url, insecure_hosts):
+        test_url = mirror + test_url_path
+        ssl_mode = ssl_mode_for_url(test_url, insecure_hosts=insecure_hosts)
+        try:
+            start = time.time()
+            req = urllib.request.Request(
+                test_url,
+                method='HEAD',
+                headers={'User-Agent': 'TCYClientUpdater/1.0'}
+            )
+            with self._urlopen_with_policy(req, timeout=5, url=test_url) as resp:
+                latency = int((time.time() - start) * 1000)
+                result = {
+                    "mirror": mirror,
+                    "label": label_by_url.get(mirror, mirror),
+                    "tested_url": test_url,
+                    "method": "HEAD",
+                    "latency": latency,
+                    "ok": True,
+                    "ssl_mode": ssl_mode,
+                    "status_class": classify_mirror_latency(latency, True),
+                }
+                self.log(f"[测速] {mirror} -> {latency}ms")
+                return result
+        except Exception as e:
+            self.log(f"[测速] {mirror} -> 超时/失败")
+            return {
+                "mirror": mirror,
+                "label": label_by_url.get(mirror, mirror),
+                "tested_url": test_url,
+                "method": "HEAD",
+                "latency": -1,
+                "ok": False,
+                "ssl_mode": ssl_mode,
+                "status_class": classify_mirror_latency(-1, False),
+                "error": str(e),
+            }
+
     def _test_mirrors_thread(self):
-        self.log("正在测试镜像速度...")
-        test_url_path = "https://github.com/KanameMadoka520/TCY-Client-Updater/releases/download/versions/latest.json"
-        results = []
-        for mirror in MIRROR_LIST:
-            try:
-                test_url = mirror + test_url_path
-                start = time.time()
-                req = urllib.request.Request(test_url, method='HEAD',
-                    headers={'User-Agent': 'TCYClientUpdater/1.0'})
-                context = ssl._create_unverified_context()
-                with urllib.request.urlopen(req, timeout=5, context=context) as resp:
-                    latency = int((time.time() - start) * 1000)
-                    results.append({"mirror": mirror, "latency": latency, "ok": True})
-                    self.log(f"[测速] {mirror} -> {latency}ms")
-            except Exception:
-                results.append({"mirror": mirror, "latency": -1, "ok": False})
-                self.log(f"[测速] {mirror} -> 超时/失败")
-        results.sort(key=lambda r: r['latency'] if r['ok'] else 99999)
-        cache = {r['mirror']: r['latency'] for r in results}
-        self.cfg_mgr.save_config({"mirror_speed_cache": cache})
-        if self.cfg_mgr.config.get("auto_select_mirror", True):
-            best = next((r for r in results if r['ok']), None)
-            if best:
-                self.cfg_mgr.save_config({"mirror_prefix": best['mirror']})
-                self.log(f"自动选择最快镜像: {best['mirror']} ({best['latency']}ms)")
-                if global_window:
-                    global_window.evaluate_js(f"document.getElementById('mirror-prefix-input').value = '{best['mirror']}'")
-        if global_window:
-            global_window.evaluate_js(f"showMirrorSpeedResults({json.dumps(results)})")
-        self.log(f"镜像测速完成: {len([r for r in results if r['ok']])} 个可用")
+        try:
+            self.log("正在测试镜像速度...")
+            test_url_path = "https://github.com/KanameMadoka520/TCY-Client-Updater/releases/download/versions/latest.json"
+            results = []
+            label_by_url = {item["url"]: item["label"] for item in MIRROR_CATALOG}
+            insecure_hosts = self._get_insecure_ssl_hosts()
+            max_workers = bounded_worker_count(len(MIRROR_LIST), MIRROR_SPEED_MAX_WORKERS)
+            self.log(f"镜像测速并发数: {max_workers}")
+            with ThreadPoolExecutor(max_workers=max_workers) as executor:
+                futures = {
+                    executor.submit(
+                        self._probe_single_mirror_speed,
+                        mirror,
+                        test_url_path,
+                        label_by_url,
+                        insecure_hosts,
+                    ): mirror
+                    for mirror in MIRROR_LIST
+                }
+                for future in as_completed(futures):
+                    results.append(future.result())
+            results.sort(key=lambda r: r['latency'] if r['ok'] else 99999)
+            cache = {r['mirror']: r['latency'] for r in results}
+            self.cfg_mgr.save_config({"mirror_speed_cache": cache})
+            if self.cfg_mgr.config.get("auto_select_mirror", True):
+                best = next((r for r in results if r['ok']), None)
+                if best:
+                    self.cfg_mgr.save_config({"mirror_prefix": best['mirror']})
+                    self.log(f"自动选择最快镜像: {best['mirror']} ({best['latency']}ms)")
+                    if global_window:
+                        global_window.evaluate_js(f"applyMirrorPrefixFromBackend({json.dumps(best['mirror'])})")
+            selected_mirror = self.cfg_mgr.config.get("mirror_prefix", DEFAULT_MIRROR_PREFIX)
+            for item in results:
+                item["selected"] = item.get("mirror") == selected_mirror
+            if global_window:
+                global_window.evaluate_js(f"showMirrorSpeedResults({json.dumps(results, ensure_ascii=False)})")
+            self.log(f"镜像测速完成: {len([r for r in results if r['ok']])} 个可用")
+        except Exception as e:
+            log_error(f"镜像测速异常: {traceback.format_exc()}")
+            self.log(f"镜像测速异常: {e}")
+            if global_window:
+                global_window.evaluate_js(f"setMirrorSpeedTestState('failed', {json.dumps('测速线程异常')})")
 
     def select_update_zip(self):
         """打开文件选择对话框选择 zip 更新包"""
@@ -2136,7 +2242,7 @@ class Api:
                     global_window.evaluate_js(f"updateProgressDetails({p}, '--', '({current_op[0]}/{total_ops}): {safe_msg}')")
 
             # 下载 external_files 到暂存区
-            mirror_prefix = self.cfg_mgr.config.get("mirror_prefix", "https://gh-proxy.org/")
+            mirror_prefix = self.cfg_mgr.config.get("mirror_prefix", DEFAULT_MIRROR_PREFIX)
             files_to_download = []
 
             for item in external_files:
@@ -2170,7 +2276,7 @@ class Api:
                             d_url = mirror_prefix + d_url
                     staging_path = os.path.join(staging_dir, item['path'])
                     os.makedirs(os.path.dirname(staging_path), exist_ok=True)
-                    urllib.request.urlretrieve(d_url, staging_path)
+                    self._download_url_to_path(d_url, staging_path, connect_timeout=15, stall_timeout=20)
                     expected_sha = item.get('sha256', '')
                     if expected_sha:
                         match, actual = self._verify_sha256(staging_path, expected_sha)
@@ -3102,7 +3208,7 @@ class Api:
                 method="POST"
             )
             try:
-                with urllib.request.urlopen(req, timeout=60, context=ssl._create_unverified_context()) as resp:
+                with self._urlopen_with_policy(req, timeout=60, url=api_url) as resp:
                     result = json.loads(resp.read().decode("utf-8"))
                 # Robust response parsing
                 content = (
@@ -4081,23 +4187,21 @@ class Api:
         return {"success": True, "results": results, "summary": {"total": total, "succeeded": succeeded, "failed": failed}}
 
     def delete_file(self, folder_type, relative_path):
-        if folder_type != 'mods' or ".." in relative_path: return False
+        if folder_type != 'mods': return False
         try:
-            # 同样适配两种路径
-            target_path = os.path.join(self.game_root, ".minecraft", "versions", TARGET_VERSION_NAME, "mods", relative_path)
-            if not os.path.exists(target_path):
-                 target_path = os.path.join(self.game_root, "versions", TARGET_VERSION_NAME, "mods", relative_path)
-            
+            target_path = self._resolve_game_relative_path("mods", relative_path)
             if os.path.exists(target_path) and os.path.isfile(target_path):
                 os.remove(target_path)
                 return True
-        except: pass
+        except Exception:
+            pass
         return False
     def open_file(self, folder_type, relative_path):
-        if folder_type != 'config' or ".." in relative_path: return
-        target_path = os.path.join(self.game_root, ".minecraft", "versions", TARGET_VERSION_NAME, "config", relative_path)
-        if not os.path.exists(target_path):
-             target_path = os.path.join(self.game_root, "versions", TARGET_VERSION_NAME, "config", relative_path)
+        if folder_type != 'config': return
+        try:
+            target_path = self._resolve_game_relative_path("config", relative_path)
+        except ValueError:
+            return
         if os.path.exists(target_path):
             try: os.startfile(target_path)
             except: pass
@@ -4122,52 +4226,86 @@ class Api:
 
     # === 多源轮询获取 JSON 的通用方法 ===
 
-    def _fetch_json_from_urls(self, url_list):
+    def _fetch_single_json_url(self, url):
+        started_at = time.time()
+        try:
+            req = urllib.request.Request(
+                url,
+                headers={'User-Agent': 'TCYClientUpdater/1.0'}
+            )
+            with self._urlopen_with_policy(req, timeout=8, url=url) as resp:
+                data = json.loads(resp.read().decode('utf-8'))
+            return {
+                "ok": True,
+                "data": data,
+                "elapsed_ms": int((time.time() - started_at) * 1000),
+            }
+        except Exception as e:
+            return {
+                "ok": False,
+                "error": str(e),
+                "elapsed_ms": int((time.time() - started_at) * 1000),
+                "timeout": self._is_network_timeout_error(e),
+            }
+
+    def _fetch_json_from_urls(self, url_list, fetch_label="版本信息"):
         """
         检查 url_list 中的每个地址，全部都尝试，收集所有结果。
         返回 (data, success_urls, failed_urls)
         data 取第一个成功的结果，None 表示全部失败。
         """
-        success_urls = []
-        failed_urls = []
-        first_data = None
-        for url in url_list:
-            try:
-                req = urllib.request.Request(
-                    url,
-                    headers={'User-Agent': 'TCYClientUpdater/1.0'}
-                )
-                context = ssl._create_unverified_context()
-                with urllib.request.urlopen(req, timeout=8, context=context) as resp:
-                    data = json.loads(resp.read().decode('utf-8'))
-                success_urls.append(url)
-                if first_data is None:
-                    first_data = data
-            except Exception as e:
-                self.log(f"[轮询] 无法从 {url} 获取信息: {e}")
-                failed_urls.append(url)
+        urls = list(url_list or [])
+        if not urls:
+            return None, [], []
+
+        max_workers = bounded_worker_count(len(urls), JSON_FETCH_MAX_WORKERS)
+        started_at = time.time()
+        self.log(f"[轮询阶段] {fetch_label}：开始检查 {len(urls)} 个地址（并发={max_workers}）")
+        results_by_url = {}
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            futures = {
+                executor.submit(self._fetch_single_json_url, url): url
+                for url in urls
+            }
+            for future in as_completed(futures):
+                url = futures[future]
+                try:
+                    result = future.result()
+                except Exception as e:
+                    result = {
+                        "ok": False,
+                        "error": str(e),
+                        "elapsed_ms": None,
+                        "timeout": self._is_network_timeout_error(e),
+                    }
+                results_by_url[url] = result
+                elapsed_ms = result.get("elapsed_ms")
+                elapsed_text = f"{elapsed_ms}ms" if isinstance(elapsed_ms, int) else "unknown"
+                if result.get("ok"):
+                    self.log(f"[轮询][{fetch_label}][OK][{elapsed_text}] {url}")
+                else:
+                    status = "TIMEOUT" if result.get("timeout") else "FAIL"
+                    self.log(f"[轮询][{fetch_label}][{status}][{elapsed_text}] {url} -> {result.get('error', 'unknown')}")
+
+        first_data, success_urls, failed_urls = summarize_url_fetch_results(urls, results_by_url)
+        timing_stats = summarize_elapsed_ms([item.get("elapsed_ms") for item in results_by_url.values()])
+        total_elapsed_ms = int((time.time() - started_at) * 1000)
+        if timing_stats["count"] > 0:
+            stats_text = f"{timing_stats['min_ms']}/{timing_stats['avg_ms']}/{timing_stats['max_ms']}ms"
+        else:
+            stats_text = "n/a"
+        self.log(
+            f"[轮询阶段] {fetch_label}：完成，成功 {len(success_urls)}/{len(urls)}，失败 {len(failed_urls)}，"
+            f"总耗时 {total_elapsed_ms}ms，URL耗时(min/avg/max)={stats_text}"
+        )
         return first_data, success_urls, failed_urls
 
     def _build_url_list(self, default_url, github_url, custom_url=""):
         """
         构建轮询列表：自定义URL（若有）> 默认URL > GitHub原始URL > GitHub加速URL
         """
-        mirror = self.cfg_mgr.config.get("mirror_prefix", "https://gh-proxy.org/").strip()
-        urls = []
-        if custom_url:
-            urls.append(custom_url)
-        urls.append(default_url)
-        urls.append(github_url)
-        if mirror and not github_url.startswith(mirror):
-            urls.append(mirror + github_url)
-        # 去重保序
-        seen = set()
-        result = []
-        for u in urls:
-            if u not in seen:
-                seen.add(u)
-                result.append(u)
-        return result
+        mirror = self.cfg_mgr.config.get("mirror_prefix", DEFAULT_MIRROR_PREFIX).strip()
+        return build_url_list(default_url, github_url, custom_url, mirror)
 
     # === 更新器自我更新逻辑 ===
 
@@ -4178,7 +4316,7 @@ class Api:
         """
         custom_url = self.cfg_mgr.config.get("custom_updater_url", "").strip()
         url_list = self._build_url_list(DEFAULT_UPDATER_JSON_URL, GITHUB_UPDATER_JSON_URL, custom_url)
-        launcher_info, success_urls, failed_urls = self._fetch_json_from_urls(url_list)
+        launcher_info, success_urls, failed_urls = self._fetch_json_from_urls(url_list, fetch_label="更新器版本")
         return launcher_info, success_urls, failed_urls
 
     def perform_self_update(self, url, version):
@@ -4187,57 +4325,68 @@ class Api:
         try:
             self.log(f"正在下载新版更新器: {version}...")
 
-            temp_download_name = "TCY-Client-Updater.new"
-            current_exe = os.path.basename(sys.executable)
+            launcher_dir = os.path.dirname(os.path.abspath(sys.executable))
+            current_exe_path = os.path.abspath(sys.executable)
+            temp_download_path = os.path.join(launcher_dir, "TCY-Client-Updater.new")
             new_exe_name = f"TCYClientUpdater-{version}.exe"
+            new_exe_path = os.path.join(launcher_dir, new_exe_name)
             current_pid = os.getpid()
+            bat_script_path = os.path.join(launcher_dir, f"update_self_{current_pid}.bat")
+            status_log_path = os.path.join(launcher_dir, "self_update_status.log")
+            launch_log_path = os.path.join(launcher_dir, "self_update_launch.log")
 
             def report(block_num, block_size, total_size):
                 if total_size > 0:
                     percent = min(100, int(block_num * block_size * 100 / total_size))
                     if percent % 10 == 0: self.log(f"自更新下载中... {percent}%")
 
-            urllib.request.urlretrieve(url, temp_download_name, report)
+            self._download_url_to_path(url, temp_download_path, progress_cb=report, connect_timeout=15, stall_timeout=20)
+            if not os.path.exists(temp_download_path):
+                raise FileNotFoundError(f"未找到已下载的临时更新文件: {temp_download_path}")
+            temp_size = os.path.getsize(temp_download_path)
+            self.log(f"自更新临时文件已下载: {temp_download_path} ({temp_size} bytes)")
 
-            bat_script = "update_self.bat"
-            with open(bat_script, "w", encoding="gbk") as f:
-                f.write("@echo off\n")
-                f.write("chcp 65001 >nul 2>&1\n")
-                f.write("echo 正在应用更新，请稍候...\n")
-                # 强制结束当前进程
-                f.write(f'taskkill /F /PID {current_pid} >nul 2>&1\n')
-                # 等待进程真正退出，重试循环
-                f.write("set RETRY=0\n")
-                f.write(":WAIT_LOOP\n")
-                f.write("timeout /t 1 /nobreak >nul\n")
-                f.write(f'del "{current_exe}" >nul 2>&1\n')
-                f.write(f'if exist "{current_exe}" (\n')
-                f.write("  set /a RETRY+=1\n")
-                f.write("  if %RETRY% LSS 10 goto WAIT_LOOP\n")
-                f.write("  echo 无法删除旧版本文件，请手动操作。\n")
-                f.write("  pause\n")
-                f.write("  exit /b 1\n")
-                f.write(")\n")
-                # 删除可能存在的同名目标文件
-                f.write(f'if exist "{new_exe_name}" del "{new_exe_name}"\n')
-                # 重命名
-                f.write(f'move "{temp_download_name}" "{new_exe_name}"\n')
-                # 启动新版本
-                f.write(f'start "" "{new_exe_name}"\n')
-                # 删除脚本自身
-                f.write('del "%~f0"\n')
+            batch_script = build_self_update_batch_script(
+                current_exe_path,
+                temp_download_path,
+                new_exe_path,
+                current_pid,
+                status_log_path,
+            )
+            with open(bat_script_path, "w", encoding="gbk", newline="\r\n") as f:
+                f.write(batch_script)
+            if not os.path.exists(bat_script_path):
+                raise FileNotFoundError(f"未找到已写入的自更新脚本: {bat_script_path}")
 
-            self.log(f"下载完成，准备重启至: {new_exe_name}")
+            launch_note = (
+                f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] version={version} "
+                f"old_exe={current_exe_path} temp={temp_download_path} "
+                f"new_exe={new_exe_path} bat={bat_script_path} status_log={status_log_path}\n"
+            )
+            try:
+                with open(launch_log_path, "a", encoding="utf-8") as f:
+                    f.write(launch_note)
+            except Exception:
+                pass
+
+            self.log(f"下载完成，准备重启至: {new_exe_path}")
+            self.log(f"自更新脚本路径: {bat_script_path}")
+            self.log(f"自更新状态日志路径: {status_log_path}")
+            self.log(f"自更新启动记录路径: {launch_log_path}")
 
             # 使用 subprocess.Popen 让 bat 脱离父进程
             CREATE_NEW_PROCESS_GROUP = 0x00000200
             DETACHED_PROCESS = 0x00000008
-            subprocess.Popen(
-                f'cmd /c "{bat_script}"',
+            proc = subprocess.Popen(
+                ["cmd.exe", "/c", bat_script_path],
+                cwd=launcher_dir,
                 creationflags=CREATE_NEW_PROCESS_GROUP | DETACHED_PROCESS,
                 close_fds=True,
                 shell=False
             )
+            self.log(f"已启动自更新脚本进程，PID={getattr(proc, 'pid', 'unknown')}")
+            self.log("若更新未完成，请先检查 self_update_status.log；若该文件不存在，再检查 self_update_launch.log 与 launcher_debug.log。")
+            flush_log_handlers()
 
             # 退出当前进程
             if global_window:
@@ -4256,7 +4405,7 @@ class Api:
         return self.cfg_mgr.config.get("current_version", INITIAL_VERSION)
 
     def record_skipped_version(self, version):
-        pass # 前端不再直接调用此方法，改为在批量更新后统一计算
+        self.add_skipped_version(version)
 
     def check_online_update(self, startup_mode=False):
         threading.Thread(target=self._check_update_thread, args=(startup_mode,)).start()
@@ -4265,13 +4414,17 @@ class Api:
         self.check_online_update(startup_mode=True)
         return {"success": True}
 
+    def _show_update_island_loading(self, message):
+        if not global_window:
+            return
+        try:
+            global_window.evaluate_js(f"showUpdateIslandLoading({json.dumps(message, ensure_ascii=False)})")
+        except Exception:
+            pass
+
     def _check_update_thread(self, startup_mode=False):
         self.log("正在从多个来源获取版本信息，请稍候...")
-        if startup_mode and global_window:
-            try:
-                global_window.evaluate_js("showUpdateIslandLoading()")
-            except Exception:
-                pass
+        self._show_update_island_loading("正在并发检查客户端版本和更新器版本…")
 
         # === 构建轮询列表 ===
         custom_latest = self.cfg_mgr.config.get("custom_latest_url", "").strip()
@@ -4281,18 +4434,54 @@ class Api:
         updater_urls = self._build_url_list(DEFAULT_UPDATER_JSON_URL, GITHUB_UPDATER_JSON_URL, custom_updater)
 
         # === 全部检查，收集每个地址的结果 ===
-        client_data, client_ok_urls, client_fail_urls = self._fetch_json_from_urls(latest_urls)
-        updater_data, updater_ok_urls, updater_fail_urls = self._fetch_json_from_urls(updater_urls)
+        fetch_results = {}
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            future_map = {
+                executor.submit(self._fetch_json_from_urls, latest_urls, "客户端版本"): {
+                    "type": "client",
+                    "label": "客户端版本",
+                    "started_at": time.time(),
+                },
+                executor.submit(self._fetch_json_from_urls, updater_urls, "更新器版本"): {
+                    "type": "updater",
+                    "label": "更新器版本",
+                    "started_at": time.time(),
+                },
+            }
+            completed_types = set()
+            for future in as_completed(future_map):
+                future_info = future_map[future]
+                fetch_type = future_info["type"]
+                fetch_label = future_info["label"]
+                try:
+                    fetch_results[fetch_type] = future.result()
+                except Exception as e:
+                    self.log(f"[轮询] {fetch_label}检查异常: {e}")
+                    fetch_results[fetch_type] = (None, [], [])
+                group_elapsed_ms = int((time.time() - future_info["started_at"]) * 1000)
+                self.log(f"[轮询阶段] {fetch_label}任务完成，耗时 {group_elapsed_ms}ms")
 
-        # === 记录日志 ===
-        for u in client_ok_urls:
-            self.log(f"[OK] [客户端版本] {u}")
-        for u in client_fail_urls:
-            self.log(f"[FAIL] [客户端版本] {u}")
-        for u in updater_ok_urls:
-            self.log(f"[OK] [更新器版本] {u}")
-        for u in updater_fail_urls:
-            self.log(f"[FAIL] [更新器版本] {u}")
+                completed_types.add(fetch_type)
+                pending_types = {"client", "updater"} - completed_types
+                if pending_types:
+                    done_labels = []
+                    if "client" in completed_types:
+                        done_labels.append("客户端版本")
+                    if "updater" in completed_types:
+                        done_labels.append("更新器版本")
+
+                    pending_labels = []
+                    if "client" in pending_types:
+                        pending_labels.append("客户端版本")
+                    if "updater" in pending_types:
+                        pending_labels.append("更新器版本")
+
+                    self._show_update_island_loading(
+                        f"{'、'.join(done_labels)}已完成，正在检查{'、'.join(pending_labels)}…"
+                    )
+
+            client_data, client_ok_urls, client_fail_urls = fetch_results.get("client", (None, [], []))
+            updater_data, updater_ok_urls, updater_fail_urls = fetch_results.get("updater", (None, [], []))
 
         # === 全部失败则不继续 ===
         if client_data is None and updater_data is None:
@@ -4308,7 +4497,7 @@ class Api:
         updater_info_for_modal = None
         if updater_data:
             remote_ver = updater_data.get("version", "0.0.0")
-            if remote_ver != LAUNCHER_INTERNAL_VERSION:
+            if is_version_newer(remote_ver, LAUNCHER_INTERNAL_VERSION):
                 updater_info_for_modal = {
                     "remote_ver": remote_ver,
                     "desc": updater_data.get("desc", "无"),
@@ -4324,15 +4513,15 @@ class Api:
         updates_queue = []
         if client_data:
             local_ver = self.get_local_version()
-            skipped_list = self.cfg_mgr.config.get("skipped_versions", [])
+            original_skipped = self.cfg_mgr.config.get("skipped_versions", [])
             if 'history' in client_data and isinstance(client_data['history'], list):
-                candidates = []
-                for item in client_data['history']:
-                    v = item.get('version')
-                    if v > local_ver or v in skipped_list:
-                        candidates.append(item)
-                candidates.sort(key=lambda x: x.get('version', '0'))
-                updates_queue = candidates
+                updates_queue, cleaned_skipped = select_pending_updates(
+                    client_data['history'],
+                    local_ver,
+                    original_skipped,
+                )
+                if cleaned_skipped != sorted(set(original_skipped), key=version_sort_key):
+                    self.cfg_mgr.save_config({"skipped_versions": cleaned_skipped})
 
         # === 将版本信息发给前端展示 ===
         modal_payload = {
@@ -4601,11 +4790,11 @@ class Api:
             
             # 更新完成后，处理版本号和跳过列表
             if successful_versions:
-                newest_ver = successful_versions[-1] # 假设列表是按顺序的
+                newest_ver = max(successful_versions, key=version_sort_key)
                 current_ver = self.get_local_version()
                 
                 # 只有当新安装的版本确实比当前版本新时，才更新 version
-                if newest_ver > current_ver:
+                if is_version_newer(newest_ver, current_ver):
                     self.cfg_mgr.save_config({"current_version": newest_ver})
                     self.log(f"客户端版本已更新为: {newest_ver}")
                 
@@ -4634,7 +4823,7 @@ class Api:
             self.update_stage = 0
             if global_window:
                 global_window.evaluate_js("updateDownloadProgress(100)")
-                global_window.evaluate_js("alert('更新流程结束！请手动关闭本更新器,重启客户端生效。')")
+                global_window.evaluate_js("onClientUpdateFinished('客户端更新已完成，请重启客户端。')")
                 global_window.evaluate_js("resetUpdateModalState()")
                 global_window.evaluate_js(f"document.getElementById('current-ver-display').innerText = '{self.get_local_version()}'")
 
@@ -5053,7 +5242,7 @@ class Api:
         cached = self.cfg_mgr.config.get("cached_history", [])
         if cached:
             # 按版本号从新到旧排序
-            cached_sorted = sorted(cached, key=lambda x: x.get('version', '0'), reverse=True)
+            cached_sorted = sort_versioned_items(cached, reverse=True)
             return json.dumps(cached_sorted)
         return json.dumps([])
 
@@ -5083,7 +5272,7 @@ class Api:
         self.log("正在获取全部历史版本列表...")
         custom_latest = self.cfg_mgr.config.get("custom_latest_url", "").strip()
         url_list = self._build_url_list(DEFAULT_LATEST_JSON_URL, GITHUB_LATEST_JSON_URL, custom_latest)
-        data, success_urls, failed_urls = self._fetch_json_from_urls(url_list)
+        data, success_urls, failed_urls = self._fetch_json_from_urls(url_list, fetch_label="历史版本列表")
 
         if data is None:
             if global_window:
@@ -5097,7 +5286,7 @@ class Api:
             return
 
         # 按版本号从小到大排序
-        history_sorted = sorted(history, key=lambda x: x.get('version', '0'))
+        history_sorted = sort_versioned_items(history)
         self.log(f"获取到 {len(history_sorted)} 个历史版本")
         if global_window:
             global_window.evaluate_js(f"showForceUpdateModal({json.dumps(history_sorted)})")
@@ -5152,9 +5341,8 @@ class Api:
                 "limit": "20",
             })
             url = f"https://api.modrinth.com/v2/search?{params}"
-            req = urllib.request.Request(url, headers={"User-Agent": "TCYClientUpdater/1.0.6 (tcymc.space)"})
-            context = ssl._create_unverified_context()
-            with urllib.request.urlopen(req, timeout=15, context=context) as resp:
+            req = urllib.request.Request(url, headers={"User-Agent": "TCYClientUpdater/1.0.7 (tcymc.space)"})
+            with self._urlopen_with_policy(req, timeout=15, url=url) as resp:
                 data = json.loads(resp.read().decode("utf-8"))
             hits = data.get("hits", [])
             total_hits = data.get("total_hits", len(hits))
@@ -5166,9 +5354,8 @@ class Api:
         """Fetch full project metadata from Modrinth for the given project_id."""
         try:
             url = f"https://api.modrinth.com/v2/project/{urllib.parse.quote(project_id)}"
-            req = urllib.request.Request(url, headers={"User-Agent": "TCYClientUpdater/1.0.6 (tcymc.space)"})
-            context = ssl._create_unverified_context()
-            with urllib.request.urlopen(req, timeout=15, context=context) as resp:
+            req = urllib.request.Request(url, headers={"User-Agent": "TCYClientUpdater/1.0.7 (tcymc.space)"})
+            with self._urlopen_with_policy(req, timeout=15, url=url) as resp:
                 data = json.loads(resp.read().decode("utf-8"))
             return json.dumps({"success": True, "project": data})
         except Exception as e:
@@ -5186,9 +5373,8 @@ class Api:
                 return json.dumps({"success": True, "projects": {}})
             params = urllib.parse.urlencode({"ids": json.dumps(ids)})
             url = f"https://api.modrinth.com/v2/projects?{params}"
-            req = urllib.request.Request(url, headers={"User-Agent": "TCYClientUpdater/1.0.6 (tcymc.space)"})
-            context = ssl._create_unverified_context()
-            with urllib.request.urlopen(req, timeout=15, context=context) as resp:
+            req = urllib.request.Request(url, headers={"User-Agent": "TCYClientUpdater/1.0.7 (tcymc.space)"})
+            with self._urlopen_with_policy(req, timeout=15, url=url) as resp:
                 data = json.loads(resp.read().decode("utf-8"))
             projects = {}
             for p in data:
@@ -5215,9 +5401,8 @@ class Api:
             url = f"https://api.modrinth.com/v2/project/{urllib.parse.quote(project_id)}/version"
             if query_str:
                 url = f"{url}?{query_str}"
-            req = urllib.request.Request(url, headers={"User-Agent": "TCYClientUpdater/1.0.6 (tcymc.space)"})
-            context = ssl._create_unverified_context()
-            with urllib.request.urlopen(req, timeout=15, context=context) as resp:
+            req = urllib.request.Request(url, headers={"User-Agent": "TCYClientUpdater/1.0.7 (tcymc.space)"})
+            with self._urlopen_with_policy(req, timeout=15, url=url) as resp:
                 versions = json.loads(resp.read().decode("utf-8"))
 
             installed = self._get_installed_mod_filenames()
@@ -5274,10 +5459,9 @@ class Api:
             try:
                 req = urllib.request.Request(
                     file_url,
-                    headers={"User-Agent": "TCYClientUpdater/1.0.6 (tcymc.space)"},
+                    headers={"User-Agent": "TCYClientUpdater/1.0.7 (tcymc.space)"},
                 )
-                context = ssl._create_unverified_context()
-                with urllib.request.urlopen(req, timeout=15, context=context) as resp:
+                with self._urlopen_with_policy(req, timeout=15, url=file_url) as resp:
                     try:
                         total_size = int(resp.headers.get("Content-Length", -1))
                     except Exception:
