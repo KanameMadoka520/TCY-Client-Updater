@@ -19,6 +19,8 @@ import threading
 
 import webview
 
+from updater_utils import resolve_relative_path
+
 
 # ============================================================
 # Resource path helper (same as main app)
@@ -30,6 +32,23 @@ def _get_resource_path(relative_path):
     else:
         base_path = os.path.abspath(".")
     return os.path.join(base_path, relative_path)
+
+
+def _resolve_direct_child_path(base_dir, child_name, item_label="文件名"):
+    if not isinstance(base_dir, str) or not base_dir:
+        raise ValueError("非法基础目录")
+    if not isinstance(child_name, str):
+        raise ValueError(f"非法{item_label}")
+    name = child_name.strip()
+    if (
+        not name
+        or name != child_name
+        or name in (".", "..")
+        or any(ch in name for ch in '\\/:*?"<>|')
+        or os.path.isabs(name)
+    ):
+        raise ValueError(f"非法{item_label}")
+    return resolve_relative_path(base_dir, name)
 
 
 # ============================================================
@@ -309,6 +328,17 @@ class NbtEditorApi:
 
     _config_lock = threading.Lock()
 
+    def __init__(self, allowed_saves_dir=None):
+        self.allowed_saves_dir = os.path.realpath(allowed_saves_dir) if allowed_saves_dir else None
+
+    def _resolve_world_path(self, saves_dir, world_folder):
+        base_dir = self.allowed_saves_dir or saves_dir
+        if self.allowed_saves_dir:
+            provided = os.path.realpath(saves_dir)
+            if provided != self.allowed_saves_dir:
+                raise ValueError("非法存档目录")
+        return _resolve_direct_child_path(base_dir, world_folder, "存档文件夹名")
+
     def nbt_open_file(self, abs_path):
         """Load a .dat/.dat_old NBT file and return its tree as JSON."""
         if abs_path.lower().endswith('.mca'):
@@ -476,7 +506,10 @@ class NbtEditorApi:
 
     def nbt_scan_folder(self, saves_dir, world_folder):
         """Recursively scan a save folder and return a tree structure for the file explorer."""
-        world_path = os.path.join(saves_dir, world_folder)
+        try:
+            world_path = self._resolve_world_path(saves_dir, world_folder)
+        except ValueError as e:
+            return json.dumps({"success": False, "error": str(e)})
         if not os.path.isdir(world_path):
             return json.dumps({"success": False, "error": "存档文件夹不存在"})
         try:
@@ -620,7 +653,10 @@ def open_nbt_editor(saves_dir, world_folder):
     Returns:
         JSON string with {success: True/False, error?: str}
     """
-    world_path = os.path.join(saves_dir, world_folder)
+    try:
+        world_path = _resolve_direct_child_path(saves_dir, world_folder, "存档文件夹名")
+    except ValueError as e:
+        return json.dumps({"success": False, "error": str(e)})
     if not os.path.isdir(world_path):
         return json.dumps({"success": False, "error": "存档文件夹不存在"})
 
@@ -630,7 +666,7 @@ def open_nbt_editor(saves_dir, world_folder):
             return json.dumps({"success": False, "error": "找不到 NBT 编辑器前端文件"})
 
         html_url = f"file:///{os.path.abspath(html_path).replace(os.sep, '/')}"
-        api = NbtEditorApi()
+        api = NbtEditorApi(saves_dir)
 
         nbt_win = webview.create_window(
             f'NBT Editor — {world_folder}',
@@ -713,11 +749,10 @@ def open_nbt_editor_standalone(abs_path):
         if not os.path.exists(html_path):
             return json.dumps({"success": False, "error": "找不到 NBT 编辑器前端文件"})
 
-        html_url = f"file:///{os.path.abspath(html_path).replace(os.sep, '/')}"
-        api = NbtEditorApi()
-
         parent_dir = os.path.dirname(abs_path)
         folder_name = os.path.basename(parent_dir)
+        html_url = f"file:///{os.path.abspath(html_path).replace(os.sep, '/')}"
+        api = NbtEditorApi(os.path.dirname(parent_dir))
 
         nbt_win = webview.create_window(
             f'NBT Editor — {os.path.basename(abs_path)}',

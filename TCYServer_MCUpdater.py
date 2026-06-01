@@ -116,7 +116,7 @@ CONFIG_FILE = "launcher_settings.json"
 # ===整合包初始版本 (客户端内容版本) ===
 INITIAL_VERSION = "26.02.06.15.24"
 # ===更新器自身版本 (传统版本号) ===
-LAUNCHER_INTERNAL_VERSION = "1.0.7"
+LAUNCHER_INTERNAL_VERSION = "1.0.8"
 
 # === 默认版本检查 JSON 地址 ===
 DEFAULT_LATEST_JSON_URL = "https://tcymc.space/update/latest.json"
@@ -1490,6 +1490,30 @@ class Api:
     def _resolve_game_relative_path(self, sub_path, relative_path):
         return resolve_relative_path(self._get_game_subdir(sub_path), relative_path)
 
+    def _resolve_direct_child_path(self, base_dir, child_name, item_label="文件名"):
+        if not isinstance(base_dir, str) or not base_dir:
+            raise ValueError("非法基础目录")
+        if not isinstance(child_name, str):
+            raise ValueError(f"非法{item_label}")
+        name = child_name.strip()
+        if (
+            not name
+            or name != child_name
+            or name in (".", "..")
+            or any(ch in name for ch in '\\/:*?"<>|')
+            or os.path.isabs(name)
+        ):
+            raise ValueError(f"非法{item_label}")
+        return resolve_relative_path(base_dir, name)
+
+    def _resolve_save_world_path(self, world_folder_name):
+        return self._resolve_direct_child_path(self._get_saves_dir(), world_folder_name, "存档文件夹名")
+
+    def _validate_mod_filename(self, filename):
+        self._resolve_direct_child_path(self.game_root, filename, "模组文件名")
+        if not (filename.endswith(".jar") or filename.endswith(".jar.disabled")):
+            raise ValueError("非法模组文件名")
+
     def _get_screenshots_dir(self):
         """获取截图目录的绝对路径"""
         version_dir = self._get_game_version_dir()
@@ -2483,6 +2507,59 @@ class Api:
         except Exception as e:
             return json.dumps({"valid": False, "error": str(e)})
 
+    def _safe_extract_zip(self, zip_path, dest_dir):
+        """Extract a zip archive while rejecting entries that escape dest_dir."""
+        with zipfile.ZipFile(zip_path, 'r') as zf:
+            for item in zf.infolist():
+                try:
+                    target_path = resolve_relative_path(dest_dir, item.filename)
+                except ValueError as exc:
+                    raise ValueError(f"更新包包含非法路径: {item.filename}") from exc
+
+                if item.is_dir():
+                    os.makedirs(target_path, exist_ok=True)
+                    continue
+
+                os.makedirs(os.path.dirname(target_path), exist_ok=True)
+                with zf.open(item, 'r') as src, open(target_path, 'wb') as dst:
+                    shutil.copyfileobj(src, dst)
+
+    def _prepare_update_manifest_paths(self, actions, external_files, temp_dir, staging_dir):
+        """Resolve manifest paths once and keep every operation under its base."""
+        if not isinstance(actions, list):
+            raise ValueError("manifest actions 必须是列表")
+        if not isinstance(external_files, list):
+            raise ValueError("manifest external_files 必须是列表")
+
+        prepared_actions = []
+        for action in actions:
+            if not isinstance(action, dict):
+                raise ValueError("manifest actions 条目必须是对象")
+
+            prepared = dict(action)
+            action_type = prepared.get('type')
+            if action_type == 'delete_keyword':
+                prepared['_folder_abs'] = resolve_relative_path(self.game_root, prepared.get('folder', ''))
+            elif action_type == 'delete':
+                prepared['_path_abs'] = resolve_relative_path(self.game_root, prepared.get('path', ''))
+            elif action_type == 'copy_folder':
+                prepared['_src_abs'] = resolve_relative_path(temp_dir, prepared.get('src', ''))
+                prepared['_dest_abs'] = resolve_relative_path(self.game_root, prepared.get('dest', ''))
+            prepared_actions.append(prepared)
+
+        prepared_files = []
+        for item in external_files:
+            if not isinstance(item, dict):
+                raise ValueError("manifest external_files 条目必须是对象")
+
+            prepared = dict(item)
+            path_value = prepared.get('path')
+            prepared['_target_abs'] = resolve_relative_path(self.game_root, path_value)
+            prepared['_staging_abs'] = resolve_relative_path(staging_dir, path_value)
+            prepared_files.append(prepared)
+
+        return prepared_actions, prepared_files
+
     def install_from_zip(self, zip_path, source_type='global'):
         """从本地 zip 安装更新（后台线程）"""
         def _run():
@@ -2518,9 +2595,7 @@ class Api:
             os.makedirs(staging_dir, exist_ok=True)
 
             # 解压
-            with zipfile.ZipFile(zip_path, 'r') as zf:
-                for file in zf.namelist():
-                    zf.extract(file, temp_dir)
+            self._safe_extract_zip(zip_path, temp_dir)
 
             manifest_path = os.path.join(temp_dir, "manifest.json")
             data = {}
@@ -2530,6 +2605,7 @@ class Api:
 
             actions = data.get('actions', [])
             external_files = data.get('external_files', [])
+            actions, external_files = self._prepare_update_manifest_paths(actions, external_files, temp_dir, staging_dir)
             total_ops = len(actions) + len(external_files)
             current_op = [0]
 
@@ -2545,7 +2621,7 @@ class Api:
             files_to_download = []
 
             for item in external_files:
-                target_path = os.path.join(self.game_root, item['path'])
+                target_path = item['_target_abs']
                 expected_sha = item.get('sha256', '')
                 if os.path.exists(target_path):
                     if expected_sha:
@@ -2573,7 +2649,7 @@ class Api:
                     if source_type == 'cn' and "github.com" in d_url:
                         if mirror_prefix and not d_url.startswith(mirror_prefix):
                             d_url = mirror_prefix + d_url
-                    staging_path = os.path.join(staging_dir, item['path'])
+                    staging_path = item['_staging_abs']
                     os.makedirs(os.path.dirname(staging_path), exist_ok=True)
                     self._download_url_to_path(d_url, staging_path, connect_timeout=15, stall_timeout=20)
                     expected_sha = item.get('sha256', '')
@@ -2615,23 +2691,23 @@ class Api:
             affected_paths = []
             for action in actions:
                 if action.get('type') == 'delete_keyword':
-                    t_folder = os.path.join(self.game_root, action.get('folder', ''))
+                    t_folder = action.get('_folder_abs', '')
                     keyword = action.get('keyword', '')
                     if os.path.exists(t_folder) and keyword:
                         for f in os.listdir(t_folder):
                             if keyword.lower() in f.lower():
                                 affected_paths.append(os.path.join(t_folder, f))
                 elif action.get('type') == 'delete':
-                    affected_paths.append(os.path.join(self.game_root, action.get('path', '')))
+                    affected_paths.append(action.get('_path_abs', ''))
                 elif action.get('type') == 'copy_folder':
-                    dest = os.path.join(self.game_root, action.get('dest', ''))
+                    dest = action.get('_dest_abs', '')
                     if os.path.exists(dest):
                         for root, dirs, files in os.walk(dest):
                             for f in files:
                                 affected_paths.append(os.path.join(root, f))
 
             for item in files_to_download:
-                tp = os.path.join(self.game_root, item['path'])
+                tp = item['_target_abs']
                 if os.path.exists(tp):
                     affected_paths.append(tp)
 
@@ -2643,7 +2719,7 @@ class Api:
                 # 执行 actions
                 for action in actions:
                     if action.get('type') == 'delete_keyword':
-                        t_folder = os.path.join(self.game_root, action.get('folder', ''))
+                        t_folder = action.get('_folder_abs', '')
                         keyword = action.get('keyword', '')
                         if os.path.exists(t_folder) and keyword:
                             for f in os.listdir(t_folder):
@@ -2653,19 +2729,19 @@ class Api:
                                         self.log(f"删: {f}")
                                     except: pass
                     elif action.get('type') == 'delete':
-                        try: os.remove(os.path.join(self.game_root, action.get('path')))
+                        try: os.remove(action.get('_path_abs', ''))
                         except: pass
                     elif action.get('type') == 'copy_folder':
-                        src = os.path.join(temp_dir, action.get('src'))
-                        dest = os.path.join(self.game_root, action.get('dest'))
+                        src = action.get('_src_abs', '')
+                        dest = action.get('_dest_abs', '')
                         if os.path.exists(src):
                             shutil.copytree(src, dest, dirs_exist_ok=True)
                             self.log(f"合并配置: {action.get('src')}")
 
                 # 移动暂存文件
                 for item in files_to_download:
-                    sp = os.path.join(staging_dir, item['path'])
-                    tp = os.path.join(self.game_root, item['path'])
+                    sp = item['_staging_abs']
+                    tp = item['_target_abs']
                     if os.path.exists(sp):
                         os.makedirs(os.path.dirname(tp), exist_ok=True)
                         shutil.move(sp, tp)
@@ -2717,10 +2793,14 @@ class Api:
             folder_path = str(folder_path or '')
             if not folder_path:
                 return {"success": False, "error": "路径为空"}
-            abs_path = os.path.abspath(folder_path)
+            abs_path = os.path.realpath(os.path.abspath(folder_path))
             # Restrict to game_root subtree for safety
-            root = os.path.abspath(self.game_root)
-            if not (abs_path == root or abs_path.startswith(root + os.sep)):
+            root = os.path.realpath(os.path.abspath(self.game_root))
+            try:
+                common = os.path.commonpath([root, abs_path])
+            except ValueError:
+                common = None
+            if common != root:
                 return {"success": False, "error": "不允许打开此路径"}
             if os.path.isfile(abs_path):
                 abs_path = os.path.dirname(abs_path)
@@ -3267,7 +3347,7 @@ class Api:
 
     def load_crash_log(self, file_type, filename):
         """Load a crash report or log file. Caps log files at 500KB."""
-        if ".." in filename:
+        if not isinstance(filename, str) or ".." in filename:
             return json.dumps({"success": False, "error": "非法文件名"})
         if file_type == "crash_report":
             base = os.path.join(self.game_root, ".minecraft", "crash-reports")
@@ -3281,7 +3361,10 @@ class Api:
                 base = os.path.join(self.game_root, "logs")
             if not os.path.exists(base):
                 base = self._get_game_subdir("logs")
-        file_path = os.path.join(base, filename)
+        try:
+            file_path = self._resolve_direct_child_path(base, filename, "日志文件名")
+        except ValueError as e:
+            return json.dumps({"success": False, "error": str(e)})
         if not os.path.isfile(file_path):
             return json.dumps({"success": False, "error": "文件不存在"})
         # Refuse .gz — list them but show badge in frontend
@@ -4223,8 +4306,9 @@ class Api:
 
             changed_count = 0
             for filename, should_be_enabled in preset["mods"].items():
-                # 安全检查，防止路径穿越
-                if ".." in filename:
+                try:
+                    self._validate_mod_filename(filename)
+                except ValueError:
                     continue
 
                 # 确定可能存在的文件名 (启用或禁用状态)
@@ -4353,7 +4437,9 @@ class Api:
                     return json.dumps({"success": False, "error": "文件格式无效：mods 键必须为字符串"})
                 if not isinstance(val, bool):
                     return json.dumps({"success": False, "error": "文件格式无效：mods 值必须为布尔类型"})
-                if ".." in key:
+                try:
+                    self._validate_mod_filename(key)
+                except ValueError:
                     return json.dumps({"success": False, "error": "文件格式无效：mod 文件名包含非法字符"})
 
             # 构建安全的预设对象（只保留允许的字段）
@@ -4379,7 +4465,9 @@ class Api:
             return json.dumps({"success": False, "error": str(e)})
 
     def toggle_mod(self, filename):
-        if ".." in filename:
+        try:
+            self._validate_mod_filename(filename)
+        except ValueError:
             return {"success": False, "error": "Invalid filename"}
 
         target_path = os.path.join(self.game_root, ".minecraft", "versions", TARGET_VERSION_NAME, "mods", filename)
@@ -4413,6 +4501,8 @@ class Api:
             ops = _json.loads(operations) if isinstance(operations, str) else operations
         except Exception:
             return {"success": False, "error": "Invalid operations format"}
+        if not isinstance(ops, list):
+            return {"success": False, "error": "Invalid operations format"}
 
         # 解析 mods 目录
         mods_dir = os.path.join(self.game_root, ".minecraft", "versions", TARGET_VERSION_NAME, "mods")
@@ -4426,10 +4516,16 @@ class Api:
         failed = 0
 
         for op in ops:
+            if not isinstance(op, dict):
+                results.append({"filename": "", "ok": False, "error": "非法操作项"})
+                failed += 1
+                continue
             fn = op.get("filename", "")
             target_enabled = op.get("target_enabled", True)
 
-            if ".." in fn:
+            try:
+                self._validate_mod_filename(fn)
+            except ValueError:
                 results.append({"filename": fn, "ok": False, "error": "非法文件名"})
                 failed += 1
                 continue
@@ -4477,8 +4573,9 @@ class Api:
                 failed += 1
 
         total = len(ops)
-        action = "batch_enable" if all(op.get("target_enabled") for op in ops) else \
-                 "batch_disable" if not any(op.get("target_enabled") for op in ops) else "batch_mixed"
+        target_flags = [op.get("target_enabled", True) for op in ops if isinstance(op, dict)]
+        action = "batch_enable" if target_flags and all(target_flags) else \
+                 "batch_disable" if target_flags and not any(target_flags) else "batch_mixed"
         self._add_activity_log("mod_batch_toggle", {
             "action": action, "total": total, "succeeded": succeeded, "failed": failed
         })
@@ -4622,17 +4719,22 @@ class Api:
         """下载新版 EXE 并执行替换脚本（修复：正确关闭自身进程）"""
         import subprocess
         try:
+            if not getattr(sys, "frozen", False):
+                raise RuntimeError("源码运行模式不支持更新器自更新，请使用打包后的 exe。")
+
             self.log(f"正在下载新版更新器: {version}...")
 
             launcher_dir = os.path.dirname(os.path.abspath(sys.executable))
             current_exe_path = os.path.abspath(sys.executable)
-            temp_download_path = os.path.join(launcher_dir, "TCY-Client-Updater.new")
+            current_exe_name = os.path.basename(current_exe_path)
             new_exe_name = f"TCYClientUpdater-{version}.exe"
+            temp_download_path = os.path.join(launcher_dir, f"{new_exe_name}.new")
             new_exe_path = os.path.join(launcher_dir, new_exe_name)
             current_pid = os.getpid()
             bat_script_path = os.path.join(launcher_dir, f"update_self_{current_pid}.bat")
             status_log_path = os.path.join(launcher_dir, "self_update_status.log")
             launch_log_path = os.path.join(launcher_dir, "self_update_launch.log")
+            backup_exe_path = os.path.join(launcher_dir, f"{current_exe_name}.old_{current_pid}")
 
             def report(block_num, block_size, total_size):
                 if total_size > 0:
@@ -4651,8 +4753,9 @@ class Api:
                 new_exe_path,
                 current_pid,
                 status_log_path,
+                backup_exe_path,
             )
-            with open(bat_script_path, "w", encoding="gbk", newline="\r\n") as f:
+            with open(bat_script_path, "w", encoding="utf-8", newline="") as f:
                 f.write(batch_script)
             if not os.path.exists(bat_script_path):
                 raise FileNotFoundError(f"未找到已写入的自更新脚本: {bat_script_path}")
@@ -4660,7 +4763,8 @@ class Api:
             launch_note = (
                 f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] version={version} "
                 f"old_exe={current_exe_path} temp={temp_download_path} "
-                f"new_exe={new_exe_path} bat={bat_script_path} status_log={status_log_path}\n"
+                f"new_exe={new_exe_path} backup={backup_exe_path} "
+                f"bat={bat_script_path} status_log={status_log_path}\n"
             )
             try:
                 with open(launch_log_path, "a", encoding="utf-8") as f:
@@ -4668,10 +4772,11 @@ class Api:
             except Exception:
                 pass
 
-            self.log(f"下载完成，准备重启至: {new_exe_path}")
+            self.log(f"下载完成，准备安装新版更新器: {new_exe_path}")
             self.log(f"自更新脚本路径: {bat_script_path}")
             self.log(f"自更新状态日志路径: {status_log_path}")
             self.log(f"自更新启动记录路径: {launch_log_path}")
+            self.log(f"旧版本备份路径: {backup_exe_path}")
 
             # 使用 subprocess.Popen 让 bat 脱离父进程
             CREATE_NEW_PROCESS_GROUP = 0x00000200
@@ -5197,9 +5302,7 @@ class Api:
             )
 
             # 解压骨架包
-            with zipfile.ZipFile(os.path.abspath(save_path), 'r') as zf:
-                for file in zf.namelist():
-                    zf.extract(file, temp_dir)
+            self._safe_extract_zip(os.path.abspath(save_path), temp_dir)
 
             manifest_path = os.path.join(temp_dir, "manifest.json")
             data = {}
@@ -5209,6 +5312,7 @@ class Api:
 
             actions = data.get('actions', [])
             external_files = data.get('external_files', [])
+            actions, external_files = self._prepare_update_manifest_paths(actions, external_files, temp_dir, staging_dir)
             total_ops = len(actions) + len(external_files)
             current_op = [0]
             progress_lock = threading.Lock()
@@ -5263,7 +5367,7 @@ class Api:
             files_to_download = []
 
             for item in external_files:
-                target_path = os.path.join(self.game_root, item['path'])
+                target_path = item['_target_abs']
                 
                 dl_status[item['name']] = {
                     'name': item['name'],
@@ -5307,7 +5411,7 @@ class Api:
                 d_url = item['url']
                 candidates_for_file = self._build_download_candidates(d_url, source_type)
 
-                staging_path = os.path.join(staging_dir, item['path'])
+                staging_path = item['_staging_abs']
                 os.makedirs(os.path.dirname(staging_path), exist_ok=True)
 
                 file_dl_state = {'downloaded': 0}
@@ -5436,24 +5540,24 @@ class Api:
             affected_paths = []
             for action in actions:
                 if action.get('type') == 'delete_keyword':
-                    t_folder = os.path.join(self.game_root, action.get('folder', ''))
+                    t_folder = action.get('_folder_abs', '')
                     keyword = action.get('keyword', '')
                     if os.path.exists(t_folder) and keyword:
                         for f in os.listdir(t_folder):
                             if keyword.lower() in f.lower():
                                 affected_paths.append(os.path.join(t_folder, f))
                 elif action.get('type') == 'delete':
-                    p = os.path.join(self.game_root, action.get('path', ''))
+                    p = action.get('_path_abs', '')
                     affected_paths.append(p)
                 elif action.get('type') == 'copy_folder':
-                    dest = os.path.join(self.game_root, action.get('dest', ''))
+                    dest = action.get('_dest_abs', '')
                     if os.path.exists(dest):
                         for root, dirs, files in os.walk(dest):
                             for f in files:
                                 affected_paths.append(os.path.join(root, f))
 
             for item in files_to_download:
-                target_path = os.path.join(self.game_root, item['path'])
+                target_path = item['_target_abs']
                 if os.path.exists(target_path):
                     affected_paths.append(target_path)
 
@@ -5471,7 +5575,7 @@ class Api:
                     report_step(op_name)
 
                     if action.get('type') == 'delete_keyword':
-                        t_folder = os.path.join(self.game_root, action.get('folder', ''))
+                        t_folder = action.get('_folder_abs', '')
                         keyword = action.get('keyword', '')
                         if os.path.exists(t_folder) and keyword:
                             for f in os.listdir(t_folder):
@@ -5483,13 +5587,13 @@ class Api:
                                     except: pass
                     elif action.get('type') == 'delete':
                         try:
-                            target = os.path.join(self.game_root, action.get('path'))
+                            target = action.get('_path_abs', '')
                             os.remove(target)
                             log_info(f"删除文件: {action.get('path')}")
                         except: pass
                     elif action.get('type') == 'copy_folder':
-                        src = os.path.join(temp_dir, action.get('src'))
-                        dest = os.path.join(self.game_root, action.get('dest'))
+                        src = action.get('_src_abs', '')
+                        dest = action.get('_dest_abs', '')
                         if os.path.exists(src):
                             try:
                                 shutil.copytree(src, dest, dirs_exist_ok=True)
@@ -5501,8 +5605,8 @@ class Api:
 
                 # 从暂存区移动文件到目标位置
                 for item in files_to_download:
-                    staging_path = os.path.join(staging_dir, item['path'])
-                    target_path = os.path.join(self.game_root, item['path'])
+                    staging_path = item['_staging_abs']
+                    target_path = item['_target_abs']
                     if os.path.exists(staging_path):
                         os.makedirs(os.path.dirname(target_path), exist_ok=True)
                         shutil.move(staging_path, target_path)
@@ -5640,7 +5744,7 @@ class Api:
                 "limit": "20",
             })
             url = f"https://api.modrinth.com/v2/search?{params}"
-            req = urllib.request.Request(url, headers={"User-Agent": "TCYClientUpdater/1.0.7 (tcymc.space)"})
+            req = urllib.request.Request(url, headers={"User-Agent": f"TCYClientUpdater/{LAUNCHER_INTERNAL_VERSION} (tcymc.space)"})
             with self._urlopen_with_policy(req, timeout=15, url=url) as resp:
                 data = json.loads(resp.read().decode("utf-8"))
             hits = data.get("hits", [])
@@ -5653,7 +5757,7 @@ class Api:
         """Fetch full project metadata from Modrinth for the given project_id."""
         try:
             url = f"https://api.modrinth.com/v2/project/{urllib.parse.quote(project_id)}"
-            req = urllib.request.Request(url, headers={"User-Agent": "TCYClientUpdater/1.0.7 (tcymc.space)"})
+            req = urllib.request.Request(url, headers={"User-Agent": f"TCYClientUpdater/{LAUNCHER_INTERNAL_VERSION} (tcymc.space)"})
             with self._urlopen_with_policy(req, timeout=15, url=url) as resp:
                 data = json.loads(resp.read().decode("utf-8"))
             return json.dumps({"success": True, "project": data})
@@ -5672,7 +5776,7 @@ class Api:
                 return json.dumps({"success": True, "projects": {}})
             params = urllib.parse.urlencode({"ids": json.dumps(ids)})
             url = f"https://api.modrinth.com/v2/projects?{params}"
-            req = urllib.request.Request(url, headers={"User-Agent": "TCYClientUpdater/1.0.7 (tcymc.space)"})
+            req = urllib.request.Request(url, headers={"User-Agent": f"TCYClientUpdater/{LAUNCHER_INTERNAL_VERSION} (tcymc.space)"})
             with self._urlopen_with_policy(req, timeout=15, url=url) as resp:
                 data = json.loads(resp.read().decode("utf-8"))
             projects = {}
@@ -5700,7 +5804,7 @@ class Api:
             url = f"https://api.modrinth.com/v2/project/{urllib.parse.quote(project_id)}/version"
             if query_str:
                 url = f"{url}?{query_str}"
-            req = urllib.request.Request(url, headers={"User-Agent": "TCYClientUpdater/1.0.7 (tcymc.space)"})
+            req = urllib.request.Request(url, headers={"User-Agent": f"TCYClientUpdater/{LAUNCHER_INTERNAL_VERSION} (tcymc.space)"})
             with self._urlopen_with_policy(req, timeout=15, url=url) as resp:
                 versions = json.loads(resp.read().decode("utf-8"))
 
@@ -5758,7 +5862,7 @@ class Api:
             try:
                 req = urllib.request.Request(
                     file_url,
-                    headers={"User-Agent": "TCYClientUpdater/1.0.7 (tcymc.space)"},
+                    headers={"User-Agent": f"TCYClientUpdater/{LAUNCHER_INTERNAL_VERSION} (tcymc.space)"},
                 )
                 with self._urlopen_with_policy(req, timeout=15, url=file_url) as resp:
                     try:
@@ -5942,7 +6046,10 @@ class Api:
         Guards against concurrent backup of the same world via _active_backups.
         """
         saves_dir = self._get_saves_dir()
-        world_path = os.path.join(saves_dir, world_folder_name)
+        try:
+            world_path = self._resolve_save_world_path(world_folder_name)
+        except ValueError as e:
+            return json.dumps({"success": False, "error": str(e)})
         if not os.path.isdir(world_path):
             return json.dumps({"success": False, "error": "存档文件夹不存在"})
 
@@ -5981,8 +6088,10 @@ class Api:
 
     def save_delete(self, world_folder_name):
         """Delete a world folder after confirming no backup is in progress."""
-        saves_dir = self._get_saves_dir()
-        world_path = os.path.join(saves_dir, world_folder_name)
+        try:
+            world_path = self._resolve_save_world_path(world_folder_name)
+        except ValueError as e:
+            return json.dumps({"success": False, "error": str(e)})
         if not os.path.isdir(world_path):
             return json.dumps({"success": False, "error": "存档文件夹不存在"})
         if world_folder_name in self._active_backups:
@@ -5995,8 +6104,12 @@ class Api:
 
     def save_open_folder(self, world_folder_name):
         """Open a world folder in the OS file explorer."""
-        saves_dir = self._get_saves_dir()
-        world_path = os.path.join(saves_dir, world_folder_name)
+        try:
+            world_path = self._resolve_save_world_path(world_folder_name)
+        except ValueError as e:
+            return json.dumps({"success": False, "error": str(e)})
+        if not os.path.isdir(world_path):
+            return json.dumps({"success": False, "error": "存档文件夹不存在"})
         try:
             os.startfile(world_path)
         except AttributeError:
@@ -6029,6 +6142,10 @@ class Api:
 
     def open_nbt_editor_for_save(self, world_folder_name):
         """Open the independent NBT editor window for a save folder."""
+        try:
+            self._resolve_save_world_path(world_folder_name)
+        except ValueError as e:
+            return json.dumps({"success": False, "error": str(e)})
         saves_dir = self._get_saves_dir()
         return open_nbt_editor(saves_dir, world_folder_name)
 

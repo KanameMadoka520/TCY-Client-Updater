@@ -158,11 +158,22 @@ def classify_mirror_latency(latency_ms, ok):
     return "slow"
 
 
-def build_self_update_batch_script(old_exe_path, temp_download_path, new_exe_path, current_pid, status_log_path):
-    old_exe = str(old_exe_path).replace("/", "\\")
-    temp_download = str(temp_download_path).replace("/", "\\")
-    new_exe = str(new_exe_path).replace("/", "\\")
-    status_log = str(status_log_path).replace("/", "\\")
+def build_self_update_batch_script(
+    old_exe_path,
+    temp_download_path,
+    new_exe_path,
+    current_pid,
+    status_log_path,
+    backup_exe_path=None,
+):
+    def batch_path(path):
+        return str(path).replace("/", "\\").replace("%", "%%")
+
+    old_exe = batch_path(old_exe_path)
+    temp_download = batch_path(temp_download_path)
+    new_exe = batch_path(new_exe_path)
+    backup_exe = batch_path(backup_exe_path or f"{old_exe_path}.old")
+    status_log = batch_path(status_log_path)
 
     lines = [
         "@echo off",
@@ -170,32 +181,57 @@ def build_self_update_batch_script(old_exe_path, temp_download_path, new_exe_pat
         f'set "OLD_EXE={old_exe}"',
         f'set "NEW_TMP={temp_download}"',
         f'set "NEW_EXE={new_exe}"',
+        f'set "BACKUP_EXE={backup_exe}"',
         f'set "STATUS_LOG={status_log}"',
         'echo [%date% %time%] 自更新脚本启动 > "%STATUS_LOG%"',
-        f"taskkill /F /PID {int(current_pid)} >nul 2>&1",
-        "set RETRY=0",
-        ":WAIT_LOOP",
-        "timeout /t 1 /nobreak >nul",
-        'del /F /Q "%OLD_EXE%" >nul 2>&1',
-        'if exist "%OLD_EXE%" (',
-        '  set /a RETRY+=1',
-        '  if %RETRY% LSS 20 goto WAIT_LOOP',
-        '  echo [%date% %time%] 无法删除旧版本文件：%OLD_EXE% >> "%STATUS_LOG%"',
+        'if not exist "%NEW_TMP%" (',
+        '  echo [%date% %time%] 新版本临时文件不存在：%NEW_TMP% >> "%STATUS_LOG%"',
         '  exit /b 1',
         ")",
-        'if exist "%NEW_EXE%" del /F /Q "%NEW_EXE%" >nul 2>&1',
+        f"taskkill /F /PID {int(current_pid)} >nul 2>&1",
+        'if exist "%BACKUP_EXE%" del /F /Q "%BACKUP_EXE%" >nul 2>&1',
+        "set RETRY=0",
+        ":WAIT_LOOP",
+        "ping -n 2 127.0.0.1 >nul",
+        'if exist "%OLD_EXE%" (',
+        '  move /Y "%OLD_EXE%" "%BACKUP_EXE%" >nul',
+        '  if errorlevel 1 (',
+        '    set /a RETRY+=1',
+        '    if %RETRY% LSS 20 goto WAIT_LOOP',
+        '    echo [%date% %time%] 无法备份旧版本文件：%OLD_EXE% -> %BACKUP_EXE% >> "%STATUS_LOG%"',
+        '    exit /b 1',
+        "  )",
+        ") else (",
+        '  echo [%date% %time%] 旧版本文件不存在，继续尝试安装新版本：%OLD_EXE% >> "%STATUS_LOG%"',
+        ")",
         'move /Y "%NEW_TMP%" "%NEW_EXE%" >nul',
         'if errorlevel 1 (',
         '  echo [%date% %time%] 无法将临时文件重命名为新版本：%NEW_TMP% -> %NEW_EXE% >> "%STATUS_LOG%"',
+        '  if exist "%BACKUP_EXE%" move /Y "%BACKUP_EXE%" "%OLD_EXE%" >nul',
         '  exit /b 1',
         ")",
         'if not exist "%NEW_EXE%" (',
         '  echo [%date% %time%] 新版本文件不存在：%NEW_EXE% >> "%STATUS_LOG%"',
+        '  if exist "%BACKUP_EXE%" move /Y "%BACKUP_EXE%" "%OLD_EXE%" >nul',
         '  exit /b 1',
         ")",
         'echo [%date% %time%] 自更新完成，准备启动：%NEW_EXE% >> "%STATUS_LOG%"',
         'start "" "%NEW_EXE%"',
-        'del "%~f0"',
+        'if errorlevel 1 (',
+        '  echo [%date% %time%] 新版本启动失败，尝试恢复旧版本：%NEW_EXE% >> "%STATUS_LOG%"',
+        '  if exist "%BACKUP_EXE%" (',
+        '    del /F /Q "%NEW_EXE%" >nul 2>&1',
+        '    move /Y "%BACKUP_EXE%" "%OLD_EXE%" >nul',
+        "  )",
+        '  exit /b 1',
+        ")",
+        'del /F /Q "%BACKUP_EXE%" >nul 2>&1',
+        'if exist "%BACKUP_EXE%" (',
+        '  echo [%date% %time%] 新版本已启动，但旧版本备份删除失败：%BACKUP_EXE% >> "%STATUS_LOG%"',
+        ") else (",
+        '  echo [%date% %time%] 旧版本已删除：%BACKUP_EXE% >> "%STATUS_LOG%"',
+        ")",
+        'del "%~f0" >nul 2>&1',
     ]
     return "\r\n".join(lines) + "\r\n"
 
@@ -209,8 +245,13 @@ def resolve_relative_path(base_dir, relative_path):
         raise ValueError("path must not be empty")
 
     normalized = trimmed.replace("\\", os.sep).replace("/", os.sep)
+    drive, _ = os.path.splitdrive(normalized)
+    if drive:
+        raise ValueError("drive-qualified paths are not allowed")
     if os.path.isabs(normalized):
         raise ValueError("absolute paths are not allowed")
+    if os.name == "nt" and ":" in normalized:
+        raise ValueError("colons are not allowed in relative paths")
 
     base_real = os.path.realpath(base_dir)
     target_real = os.path.realpath(os.path.join(base_real, normalized))

@@ -1,6 +1,6 @@
 # TCY Client Updater (原 TCYServer_MCUpdater)
 
-![Version](https://img.shields.io/badge/version-1.0.7-blue) ![Author](https://img.shields.io/badge/author-KanameMadoka520-purple)
+![Version](https://img.shields.io/badge/version-1.0.8-blue) ![Author](https://img.shields.io/badge/author-KanameMadoka520-purple)
 ![Author](https://img.shields.io/badge/author-LainElaina-purple)
 [![License](https://img.shields.io/badge/license-CC%20BY--NC--SA%204.0-green)](https://github.com/KanameMadoka520/TCY-Client-Updater/blob/main/LICENSE)
 
@@ -79,7 +79,7 @@ https://tcymc.space
 
 ### 4. 双轨版本控制机制
 
-* **启动器自更新**: 支持语义化版本（如 `1.0.7`），采用 UTF-8 批处理脚本，**自适应保留用户重命名后的文件名**（即使是包含 Emoji 的怪异名字）。
+* **启动器自更新**: 支持语义化版本（如 `1.0.8`），采用 UTF-8 批处理脚本，固定生成 `TCYClientUpdater-<版本>.exe`，并会自动清理用户改名后的旧版 EXE。
 * **内容更新**: 采用时间戳版本（如 `26.02.06.15.53`），支持增量更新与可选内容的"补票"机制。
 
 ### 5. 高分屏适配与配置持久化
@@ -439,7 +439,7 @@ https://tcymc.space
 
 ```text
 您的游戏整合包文件夹 (名称可自定义)/
-├── TCYClientUpdater-1.0.7.exe           <-- 【关键】必须放在这里，与 .minecraft 同级
+├── TCYClientUpdater-1.0.8.exe           <-- 【关键】必须放在这里，与 .minecraft 同级
 ├── launcher_settings.json           <-- (自动生成) 配置文件
 ├── launcher_debug.log               <-- (自动生成) 运行日志
 ├── conflict_rules.json              <-- (可选) 冲突规则文件，v1.0.5 新增
@@ -652,7 +652,7 @@ pip install pywebview pyinstaller
 
 1. **修改程序名称**
 
-* 找到：`EXE_NAME = "TCYClientUpdater-1.0.7"`
+* 找到：`EXE_NAME = "TCYClientUpdater-1.0.8"`
 * **要做的事**: 改成你想要的程序名字，比如 `"终末地客户端更新器"`。
 
 2. **额外数据文件 (v1.0.5 新增)**
@@ -693,7 +693,7 @@ pip install pywebview pyinstaller
 
 ```json
 {
-  "version": "1.0.7",
+  "version": "1.0.8",
   "desc": "更新器自我升级：修复了闪退问题",
   "url": "https://你的网站/download/NewUpdater.exe"
 }
@@ -816,6 +816,16 @@ python build.py
 ---
 
 ## 🗓️ 更新日志 (Changelog)
+
+### v1.0.8 (2026-06-01)
+
+* **自更新可靠性修复**:
+  * 新版更新器固定生成 `TCYClientUpdater-<版本>.exe`，不再沿用用户改名后的旧文件名。
+  * 自更新脚本会先备份当前运行的旧 EXE，安装或启动失败时尽量回滚；新 EXE 启动成功后清理被用户改名的旧版 EXE。
+  * 源码运行模式不再执行自更新，避免把 Python 解释器路径当成待替换的更新器文件。
+* **更新包路径安全加固**:
+  * 更新 zip 解压和 `manifest.json` 中的 `delete` / `delete_keyword` / `copy_folder` / `external_files` 路径统一校验，拒绝绝对路径、`../` 逃逸和 Windows drive-relative 写法。
+  * 存档、NBT 存档入口、Crash Log 读取、Mod 启停、Mod 预设导入/加载等文件操作接口补充直接子项校验，避免外部参数越界删除、读取或重命名项目外文件。
 
 ### v1.0.7 (2026-03-13)
 
