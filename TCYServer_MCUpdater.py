@@ -713,6 +713,62 @@ class Api:
             result.append(norm)
         return result
 
+    def _launcher_name_from_config_path(self, path):
+        lower = str(path or '').lower()
+        if 'hmcl' in lower:
+            return 'HMCL'
+        if 'pcl' in lower:
+            return 'PCL'
+        return '未知启动器'
+
+    def _load_json_file_relaxed(self, path):
+        try:
+            with open(path, 'r', encoding='utf-8', errors='ignore') as f:
+                text = f.read()
+            text = text.lstrip('\ufeff').strip()
+            if not text:
+                return None, ''
+            return json.loads(text), text
+        except Exception:
+            return None, ''
+
+    def _get_hmcl_runtime_base(self, config_path):
+        config_dir = os.path.dirname(os.path.abspath(config_path))
+        if os.path.basename(config_dir).lower() == '.hmcl':
+            return os.path.dirname(config_dir)
+        return config_dir
+
+    def _resolve_hmcl_path(self, raw_path, config_path):
+        cleaned = str(raw_path or '').strip().strip('"').strip("'")
+        if not cleaned:
+            return ''
+        cleaned = cleaned.replace('/', os.sep).replace('\\', os.sep)
+        if os.path.isabs(cleaned):
+            return os.path.normpath(cleaned)
+
+        config_dir = os.path.dirname(os.path.abspath(config_path))
+        candidate_bases = [
+            self._get_hmcl_runtime_base(config_path),
+            config_dir,
+            current_dir,
+        ]
+        seen = set()
+        fallback = ''
+        for base in candidate_bases:
+            if not base:
+                continue
+            norm_base = os.path.normpath(base)
+            key = norm_base.lower()
+            if key in seen:
+                continue
+            seen.add(key)
+            candidate = os.path.normpath(os.path.join(norm_base, cleaned))
+            if not fallback:
+                fallback = candidate
+            if os.path.exists(candidate):
+                return candidate
+        return fallback or os.path.normpath(cleaned)
+
     def _normalize_java_binary_path(self, path):
         raw = str(path or '').strip().strip('"').strip("'")
         if not raw:
@@ -742,14 +798,172 @@ class Api:
                 return candidate
         return ''
 
+    def _extract_hmcl_profile_context(self, config_path):
+        data, _ = self._load_json_file_relaxed(config_path)
+        if not isinstance(data, dict):
+            return None
+
+        configurations = data.get('configurations')
+        if not isinstance(configurations, dict) or not configurations:
+            return None
+
+        selected_profile = str(data.get('last') or '').strip()
+        if selected_profile not in configurations:
+            selected_profile = next(iter(configurations.keys()))
+
+        profile = configurations.get(selected_profile)
+        if not isinstance(profile, dict):
+            return None
+
+        game_dir = self._resolve_hmcl_path(profile.get('gameDir') or '', config_path)
+        selected_version = str(profile.get('selectedMinecraftVersion') or '').strip()
+        version_setting_path = ''
+        if game_dir and selected_version:
+            version_setting_path = os.path.normpath(
+                os.path.join(game_dir, 'versions', selected_version, 'hmclversion.cfg')
+            )
+
+        return {
+            'launcher': 'HMCL',
+            'config_path': config_path,
+            'profile_name': selected_profile,
+            'profile': profile,
+            'global_setting': profile.get('global') if isinstance(profile.get('global'), dict) else {},
+            'game_dir': game_dir,
+            'selected_version': selected_version,
+            'use_relative_path': bool(profile.get('useRelativePath')),
+            'version_setting_path': version_setting_path,
+        }
+
+    def _load_hmcl_effective_version_setting(self, config_path):
+        context = self._extract_hmcl_profile_context(config_path)
+        if not context:
+            return None
+
+        effective_setting = context.get('global_setting') if isinstance(context.get('global_setting'), dict) else {}
+        setting_source = 'global'
+        local_setting = None
+
+        version_setting_path = context.get('version_setting_path') or ''
+        if version_setting_path and os.path.exists(version_setting_path):
+            local_data, _ = self._load_json_file_relaxed(version_setting_path)
+            if isinstance(local_data, dict):
+                local_setting = local_data
+                if not local_data.get('usesGlobal', False):
+                    effective_setting = local_data
+                    setting_source = 'version'
+
+        context['local_setting'] = local_setting if isinstance(local_setting, dict) else None
+        context['effective_setting'] = effective_setting if isinstance(effective_setting, dict) else {}
+        context['setting_source'] = setting_source
+        return context
+
+    def _extract_hmcl_selected_java(self, hmcl_context):
+        if not isinstance(hmcl_context, dict):
+            return None
+
+        setting = hmcl_context.get('effective_setting')
+        if not isinstance(setting, dict):
+            return None
+
+        mode = str(setting.get('javaVersionType') or 'AUTO').strip().upper() or 'AUTO'
+        java_value = str(setting.get('java') or '').strip()
+        java_path = ''
+
+        if mode == 'CUSTOM':
+            java_path = self._normalize_java_binary_path(setting.get('javaDir'))
+        elif mode == 'DETECTED':
+            java_path = self._normalize_java_binary_path(setting.get('defaultJavaPath'))
+
+        return {
+            'launcher': 'HMCL',
+            'config_path': hmcl_context.get('config_path'),
+            'profile_name': hmcl_context.get('profile_name'),
+            'selected_version': hmcl_context.get('selected_version'),
+            'game_dir': hmcl_context.get('game_dir'),
+            'setting_source': hmcl_context.get('setting_source'),
+            'java_path': java_path,
+            'selection_mode': mode,
+            'java_value': java_value,
+        }
+
+    def _safe_int(self, value):
+        if value is None or value == '':
+            return None
+        try:
+            return int(value)
+        except Exception:
+            return None
+
+    def _build_hmcl_jvm_args(self, setting):
+        if not isinstance(setting, dict):
+            return ''
+
+        java_args = ' '.join(str(setting.get('javaArgs') or '').split())
+        parts = []
+
+        min_memory = self._safe_int(setting.get('minMemory'))
+        max_memory = self._safe_int(setting.get('maxMemory'))
+
+        has_xms = bool(re.search(r'(^|\s)-Xms\S+', java_args))
+        has_xmx = bool(re.search(r'(^|\s)-Xmx\S+', java_args))
+
+        if min_memory and min_memory > 0 and not has_xms:
+            parts.append(f'-Xms{min_memory}M')
+        if max_memory and max_memory > 0 and not has_xmx:
+            parts.append(f'-Xmx{max_memory}M')
+        if java_args:
+            parts.append(java_args)
+
+        return ' '.join(parts).strip()
+
+    def _build_hmcl_jvm_profile(self, config_path):
+        hmcl_context = self._load_hmcl_effective_version_setting(config_path)
+        if not hmcl_context:
+            return None
+
+        java_selection = self._extract_hmcl_selected_java(hmcl_context) or {}
+        setting = hmcl_context.get('effective_setting') if isinstance(hmcl_context.get('effective_setting'), dict) else {}
+        args = self._build_hmcl_jvm_args(setting)
+
+        profile_path = hmcl_context.get('config_path')
+        if hmcl_context.get('setting_source') == 'version' and hmcl_context.get('version_setting_path'):
+            profile_path = hmcl_context.get('version_setting_path')
+
+        return {
+            'launcher': 'HMCL',
+            'path': profile_path,
+            'config_path': hmcl_context.get('config_path'),
+            'profile': hmcl_context.get('profile_name'),
+            'selected_version': hmcl_context.get('selected_version'),
+            'game_dir': hmcl_context.get('game_dir'),
+            'setting_source': hmcl_context.get('setting_source'),
+            'args': args,
+            'java_version_type': java_selection.get('selection_mode'),
+            'java_value': java_selection.get('java_value'),
+            'java_path': java_selection.get('java_path'),
+        }
+
     def _detect_launcher_java_selection(self):
+        fallback = None
         for norm in self._get_launcher_config_paths():
             try:
+                launcher = self._launcher_name_from_config_path(norm)
+                if launcher == 'HMCL':
+                    selected = self._extract_hmcl_selected_java(self._load_hmcl_effective_version_setting(norm))
+                    if selected:
+                        java_path = self._normalize_java_binary_path(selected.get('java_path'))
+                        if java_path and os.path.exists(java_path):
+                            selected['java_path'] = java_path
+                            return selected
+                        if fallback is None:
+                            fallback = selected
+                        continue
+
                 with open(norm, 'r', encoding='utf-8', errors='ignore') as f:
                     text = f.read()
                 java_path = self._extract_java_binary_from_text(text)
                 if java_path:
-                    launcher = 'HMCL' if 'hmcl' in norm.lower() else 'PCL' if 'pcl' in norm.lower() else '未知启动器'
                     return {
                         'launcher': launcher,
                         'config_path': norm,
@@ -757,17 +971,23 @@ class Api:
                     }
             except Exception:
                 pass
-        return None
+        return fallback
 
     def _detect_launcher_jvm_configs(self):
         candidates = []
         for norm in self._get_launcher_config_paths():
             try:
+                launcher = self._launcher_name_from_config_path(norm)
+                if launcher == 'HMCL':
+                    hmcl_profile = self._build_hmcl_jvm_profile(norm)
+                    if hmcl_profile:
+                        candidates.append(hmcl_profile)
+                        continue
+
                 with open(norm, 'r', encoding='utf-8', errors='ignore') as f:
                     text = f.read()
                 args = self._extract_jvm_args_from_text(text)
                 if args:
-                    launcher = 'HMCL' if 'hmcl' in norm.lower() else 'PCL' if 'pcl' in norm.lower() else '未知启动器'
                     candidates.append({
                         'launcher': launcher,
                         'path': norm,
@@ -776,6 +996,41 @@ class Api:
             except Exception:
                 pass
         return candidates
+
+    def _select_primary_launcher_profile(self, selected_java=None):
+        profiles = self._detect_launcher_jvm_configs()
+        if not profiles:
+            return None
+
+        if isinstance(selected_java, dict):
+            selected_launcher = str(selected_java.get('launcher') or '').strip()
+            selected_config_path = os.path.normpath(str(selected_java.get('config_path') or '').strip()) if selected_java.get('config_path') else ''
+            selected_profile = str(selected_java.get('profile_name') or '').strip()
+            selected_version = str(selected_java.get('selected_version') or '').strip()
+
+            for item in profiles:
+                item_launcher = str(item.get('launcher') or '').strip()
+                item_config_path = os.path.normpath(str(item.get('config_path') or '').strip()) if item.get('config_path') else ''
+                if selected_launcher and item_launcher != selected_launcher:
+                    continue
+                if selected_config_path and item_config_path and item_config_path == selected_config_path:
+                    return item
+
+            for item in profiles:
+                item_launcher = str(item.get('launcher') or '').strip()
+                if selected_launcher and item_launcher != selected_launcher:
+                    continue
+                if selected_profile and str(item.get('profile') or '').strip() != selected_profile:
+                    continue
+                if selected_version and str(item.get('selected_version') or '').strip() != selected_version:
+                    continue
+                return item
+
+            for item in profiles:
+                if selected_launcher and str(item.get('launcher') or '').strip() == selected_launcher:
+                    return item
+
+        return profiles[0]
 
     def get_launcher_jvm_profiles(self):
         try:
@@ -836,6 +1091,41 @@ class Api:
                 java_versions = []
             selected_java = self._detect_launcher_java_selection()
             java_summary = summarize_java_versions(java_versions, selected_java)
+            primary_launcher_profile = self._select_primary_launcher_profile(selected_java)
+            launcher_name = ''
+            launcher_profile = ''
+            launcher_selected_version = ''
+            launcher_setting_source = ''
+            launcher_java_mode = ''
+            launcher_config_path = ''
+            launcher_java_path = ''
+            launcher_profile_path = ''
+            launcher_jvm_args = ''
+            if isinstance(selected_java, dict):
+                launcher_name = str(selected_java.get('launcher') or '')
+                launcher_profile = str(selected_java.get('profile_name') or '')
+                launcher_selected_version = str(selected_java.get('selected_version') or '')
+                launcher_setting_source = str(selected_java.get('setting_source') or '')
+                launcher_java_mode = str(selected_java.get('selection_mode') or '')
+                launcher_config_path = str(selected_java.get('config_path') or '')
+                launcher_java_path = str(selected_java.get('java_path') or '')
+            if isinstance(primary_launcher_profile, dict):
+                if not launcher_name:
+                    launcher_name = str(primary_launcher_profile.get('launcher') or '')
+                if not launcher_profile:
+                    launcher_profile = str(primary_launcher_profile.get('profile') or '')
+                if not launcher_selected_version:
+                    launcher_selected_version = str(primary_launcher_profile.get('selected_version') or '')
+                if not launcher_setting_source:
+                    launcher_setting_source = str(primary_launcher_profile.get('setting_source') or '')
+                if not launcher_java_mode:
+                    launcher_java_mode = str(primary_launcher_profile.get('java_version_type') or '')
+                if not launcher_config_path:
+                    launcher_config_path = str(primary_launcher_profile.get('config_path') or '')
+                if not launcher_java_path:
+                    launcher_java_path = str(primary_launcher_profile.get('java_path') or '')
+                launcher_profile_path = str(primary_launcher_profile.get('path') or '')
+                launcher_jvm_args = str(primary_launcher_profile.get('args') or '')
 
             mods_enabled = 0
             mods_disabled = 0
@@ -887,6 +1177,15 @@ class Api:
                     "java_count": java_summary.get("java_count"),
                     "current_java_label": java_summary.get("current_java_label"),
                     "current_java_note": java_summary.get("current_java_note"),
+                    "launcher_name": launcher_name,
+                    "launcher_profile": launcher_profile,
+                    "launcher_selected_version": launcher_selected_version,
+                    "launcher_setting_source": launcher_setting_source,
+                    "launcher_java_mode": launcher_java_mode,
+                    "launcher_config_path": launcher_config_path,
+                    "launcher_java_path": launcher_java_path,
+                    "launcher_profile_path": launcher_profile_path,
+                    "launcher_jvm_args": launcher_jvm_args,
                     "mods_enabled": mods_enabled,
                     "mods_disabled": mods_disabled,
                     "save_count": save_count,

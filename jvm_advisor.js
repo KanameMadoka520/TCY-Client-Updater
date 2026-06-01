@@ -157,6 +157,79 @@
         }
     }
 
+    function formatLauncherSettingSource(source) {
+        const key = String(source || '').toLowerCase();
+        if (key === 'version') {
+            return { label: '版本专属配置', detail: '参数来自当前版本目录下的 hmclversion.cfg' };
+        }
+        if (key === 'global') {
+            return { label: '全局配置', detail: '当前版本仍在继承 HMCL profile 的 global 配置' };
+        }
+        return { label: '来源未知', detail: '暂时无法判断参数来自全局还是版本专属配置' };
+    }
+
+    function formatLauncherJavaSelection(profile) {
+        const mode = String(profile?.java_version_type || profile?.selection_mode || '').toUpperCase();
+        const value = String(profile?.java_value || '').trim();
+        const path = String(profile?.java_path || '').trim();
+        if (mode === 'CUSTOM') {
+            return {
+                label: '自定义 Java 路径',
+                detail: path ? `HMCL 当前记录的自定义 Java 路径为 ${path}` : 'HMCL 当前处于自定义 Java 路径模式，但路径字段为空。'
+            };
+        }
+        if (mode === 'DETECTED') {
+            return {
+                label: '已检测 Java',
+                detail: path
+                    ? `HMCL 锁定到已检测到的 Java：${path}${value ? `（版本值 ${value}）` : ''}`
+                    : (value ? `HMCL 使用已检测 Java，当前保存的版本值为 ${value}。` : 'HMCL 使用已检测 Java，但当前没有拿到具体路径。')
+            };
+        }
+        if (mode === 'VERSION') {
+            return {
+                label: '按 Java 大版本选择',
+                detail: value ? `HMCL 当前按 Java ${value} 大版本选择运行时，而不是固定某个绝对路径。` : 'HMCL 当前按 Java 大版本选择运行时。'
+            };
+        }
+        if (mode === 'DEFAULT') {
+            return {
+                label: '启动器默认 Java',
+                detail: 'HMCL 当前使用“默认 Java”模式。这个模式不会在版本配置里固定某一条自定义路径。'
+            };
+        }
+        if (mode === 'AUTO') {
+            return {
+                label: '自动匹配 Java',
+                detail: 'HMCL 当前处于自动匹配模式，会按版本约束和本机环境自动选择合适的 Java。'
+            };
+        }
+        return {
+            label: 'Java 模式未知',
+            detail: '当前没有从启动器配置里读到稳定的 Java 选择模式。'
+        };
+    }
+
+    function renderLauncherMetaSummary(profile, compact = false) {
+        const sourceInfo = formatLauncherSettingSource(profile?.setting_source);
+        const javaInfo = formatLauncherJavaSelection(profile);
+        const lines = [];
+        if (profile?.profile) lines.push(`Profile：<strong>${esc(profile.profile)}</strong>`);
+        if (profile?.selected_version) lines.push(`当前版本：<strong>${esc(profile.selected_version)}</strong>`);
+        if (profile?.game_dir) lines.push(`实例目录：<code>${esc(profile.game_dir)}</code>`);
+        lines.push(`配置来源：<strong>${esc(sourceInfo.label)}</strong>`);
+        lines.push(`Java 选择：<strong>${esc(javaInfo.label)}</strong>`);
+        if (!compact) {
+            lines.push(`来源说明：${esc(sourceInfo.detail)}`);
+            lines.push(`Java 说明：${esc(javaInfo.detail)}`);
+        }
+        return `
+            <div style="font-size:12px; opacity:0.78; line-height:1.8;">
+                ${lines.map(line => `<div>${line}</div>`).join('')}
+            </div>
+        `;
+    }
+
     function renderJvmDiffPanel(launcherProfiles, rec) {
         const launchers = Array.isArray(launcherProfiles) ? launcherProfiles : [];
         if (!launchers.length) {
@@ -226,9 +299,13 @@
             const adviceHtml = `<ul style="margin:0; padding-left:18px; line-height:1.9; font-size:13px; opacity:0.86;">${advice.map(item => `<li>${item}</li>`).join('')}</ul>`;
 
             const body = `
-                <div style="font-size:12px; opacity:0.78; margin-bottom:10px; line-height:1.8;">
-                    启动器：<strong>${esc(profile.launcher || '启动器')}</strong><br>
-                    路径：<code>${esc(profile.path || '')}</code>
+                <div class="card" style="padding:12px; margin-bottom:10px; border:1px solid rgba(59,130,246,0.18); background:rgba(59,130,246,0.05); box-shadow:none;">
+                    <div style="font-size:12px; color:#3b82f6; font-weight:700; letter-spacing:0.04em; margin-bottom:6px;">当前读取到的启动器配置</div>
+                    <div style="font-size:12px; opacity:0.78; line-height:1.8;">
+                        <div>启动器：<strong>${esc(profile.launcher || '启动器')}</strong></div>
+                        <div>参数文件：<code>${esc(profile.path || '')}</code></div>
+                    </div>
+                    <div style="margin-top:8px;">${renderLauncherMetaSummary(profile)}</div>
                 </div>
                 <div class="card" style="padding:12px; margin-bottom:10px; border:1px solid rgba(16,185,129,0.22); background:rgba(16,185,129,0.05); box-shadow:none;">
                     <div style="font-size:12px; color:#10b981; font-weight:700; letter-spacing:0.04em; margin-bottom:6px;">改动摘要</div>
@@ -375,9 +452,13 @@
             <div class="card" style="padding:14px;">
                 <div style="display:flex; justify-content:space-between; gap:8px; align-items:center; flex-wrap:wrap; margin-bottom:8px;">
                     <strong>${esc(item.launcher || '启动器')}</strong>
-                    <span style="font-size:11px; opacity:0.7;">已检测到当前 JVM 参数</span>
+                    <span style="font-size:11px; opacity:0.7;">${item.args ? '已检测到当前 JVM 参数' : '已读取到当前启动器配置'}</span>
                 </div>
                 <div style="font-size:12px; opacity:0.72; line-height:1.7; margin-bottom:8px;">路径：<code>${esc(item.path || '')}</code></div>
+                <div class="card" style="padding:12px; margin-bottom:10px; border:1px solid rgba(59,130,246,0.18); background:rgba(59,130,246,0.05); box-shadow:none;">
+                    <div style="font-size:12px; color:#3b82f6; font-weight:700; letter-spacing:0.04em; margin-bottom:6px;">当前读取到的实例信息</div>
+                    ${renderLauncherMetaSummary(item, true)}
+                </div>
                 <div style="display:grid; grid-template-columns:1fr 1fr; gap:10px;">
                     <div>
                         <div style="font-size:12px; opacity:0.7; margin-bottom:6px;">当前值</div>
@@ -387,6 +468,11 @@
                         <div style="font-size:12px; opacity:0.7; margin-bottom:6px;">推荐值（${esc(rec?.primary?.name || '主方案')}）</div>
                         <textarea readonly style="width:100%; min-height:110px; resize:vertical; padding:10px; border-radius:8px; border:1px solid ${primaryTone.border}; background:color-mix(in srgb, ${primaryTone.bg} 65%, var(--card-bg)); color:var(--text-color); font-family:Consolas,monospace; font-size:12px; box-sizing:border-box;">${rec?.copy_ready || ''}</textarea>
                     </div>
+                </div>
+                <div style="font-size:12px; opacity:0.72; margin-top:8px; line-height:1.8;">
+                    ${item.args
+                        ? '上面的“当前值”已经按启动器配置恢复成可对比的一串 JVM 参数。'
+                        : '这个启动器实例已经识别出来了，但当前没有读到显式 JVM 参数；如果它使用的是自动内存 / 自动 Java 模式，这种情况是正常的。'}
                 </div>
                 <div style="display:flex; justify-content:flex-end; gap:8px; margin-top:8px; flex-wrap:wrap;">
                     <button class="btn outline small" onclick="copyEncodedText('${encodeURIComponent('' + (item.args || ''))}')">复制当前值</button>
