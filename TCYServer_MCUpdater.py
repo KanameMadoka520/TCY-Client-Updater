@@ -2495,6 +2495,8 @@ class Api:
                             desc_parts.append(f"删除含 [{a.get('keyword','')}] 的文件")
                         elif a.get('type') == 'delete':
                             desc_parts.append(f"删除 {a.get('path','')}")
+                        elif a.get('type') == 'copy_file':
+                            desc_parts.append(f"覆盖文件 {a.get('dest','')}")
                         elif a.get('type') == 'copy_folder':
                             desc_parts.append(f"覆盖 {a.get('dest','')}")
                     return json.dumps({
@@ -2545,6 +2547,9 @@ class Api:
             elif action_type == 'copy_folder':
                 prepared['_src_abs'] = resolve_relative_path(temp_dir, prepared.get('src', ''))
                 prepared['_dest_abs'] = resolve_relative_path(self.game_root, prepared.get('dest', ''))
+            elif action_type == 'copy_file':
+                prepared['_src_abs'] = resolve_relative_path(temp_dir, prepared.get('src', ''))
+                prepared['_dest_abs'] = resolve_relative_path(self.game_root, prepared.get('dest', ''))
             prepared_actions.append(prepared)
 
         prepared_files = []
@@ -2559,6 +2564,88 @@ class Api:
             prepared_files.append(prepared)
 
         return prepared_actions, prepared_files
+
+    def _collect_action_affected_paths(self, actions):
+        """Collect existing files that should be backed up before applying actions."""
+        affected_paths = []
+        for action in actions:
+            if action.get('type') == 'delete_keyword':
+                t_folder = action.get('_folder_abs', '')
+                keyword = action.get('keyword', '')
+                if os.path.exists(t_folder) and keyword:
+                    for f in os.listdir(t_folder):
+                        if keyword.lower() in f.lower():
+                            affected_paths.append(os.path.join(t_folder, f))
+            elif action.get('type') == 'delete':
+                affected_paths.append(action.get('_path_abs', ''))
+            elif action.get('type') == 'copy_folder':
+                dest = action.get('_dest_abs', '')
+                if os.path.exists(dest):
+                    for root, dirs, files in os.walk(dest):
+                        for f in files:
+                            affected_paths.append(os.path.join(root, f))
+            elif action.get('type') == 'copy_file':
+                dest = action.get('_dest_abs', '')
+                if os.path.exists(dest):
+                    affected_paths.append(dest)
+        return affected_paths
+
+    def _get_update_action_label(self, action):
+        action_type = action.get('type')
+        if action_type == 'delete_keyword':
+            return "清理旧文件"
+        if action_type == 'delete':
+            return "删除文件"
+        if action_type == 'copy_folder':
+            return "覆盖目录"
+        if action_type == 'copy_file':
+            return "覆盖文件"
+        return "处理更新"
+
+    def _apply_update_action(self, action):
+        """Apply one manifest action. copy_file is strict to catch incomplete packages."""
+        action_type = action.get('type')
+        if action_type == 'delete_keyword':
+            t_folder = action.get('_folder_abs', '')
+            keyword = action.get('keyword', '')
+            if os.path.exists(t_folder) and keyword:
+                for f in os.listdir(t_folder):
+                    if keyword.lower() in f.lower():
+                        try:
+                            os.remove(os.path.join(t_folder, f))
+                            self.log(f"删: {f}")
+                            log_info(f"删除文件: {f}")
+                        except:
+                            pass
+        elif action_type == 'delete':
+            try:
+                target = action.get('_path_abs', '')
+                os.remove(target)
+                log_info(f"删除文件: {action.get('path')}")
+            except:
+                pass
+        elif action_type == 'copy_folder':
+            src = action.get('_src_abs', '')
+            dest = action.get('_dest_abs', '')
+            if os.path.exists(src):
+                try:
+                    shutil.copytree(src, dest, dirs_exist_ok=True)
+                    self.log(f"合并配置: {action.get('src')} -> {dest}")
+                    log_info(f"合并配置文件夹: {action.get('src')} -> {dest}")
+                except Exception as e:
+                    self.log(f"合并失败: {e}")
+                    log_error(f"合并文件夹失败: {e}")
+        elif action_type == 'copy_file':
+            src = action.get('_src_abs', '')
+            dest = action.get('_dest_abs', '')
+            if not os.path.isfile(src):
+                raise FileNotFoundError(f"copy_file 源文件不存在: {action.get('src')}")
+            if os.path.isdir(dest):
+                raise IsADirectoryError(f"copy_file 目标路径是目录: {action.get('dest')}")
+            os.makedirs(os.path.dirname(dest), exist_ok=True)
+            shutil.copy2(src, dest)
+            self.log(f"覆盖文件: {action.get('src')} -> {dest}")
+            log_info(f"覆盖文件: {action.get('src')} -> {action.get('dest')}")
 
     def install_from_zip(self, zip_path, source_type='global'):
         """从本地 zip 安装更新（后台线程）"""
@@ -2688,23 +2775,7 @@ class Api:
                 global_window.evaluate_js("disableCancelButton()")
 
             # 收集受影响的文件并备份
-            affected_paths = []
-            for action in actions:
-                if action.get('type') == 'delete_keyword':
-                    t_folder = action.get('_folder_abs', '')
-                    keyword = action.get('keyword', '')
-                    if os.path.exists(t_folder) and keyword:
-                        for f in os.listdir(t_folder):
-                            if keyword.lower() in f.lower():
-                                affected_paths.append(os.path.join(t_folder, f))
-                elif action.get('type') == 'delete':
-                    affected_paths.append(action.get('_path_abs', ''))
-                elif action.get('type') == 'copy_folder':
-                    dest = action.get('_dest_abs', '')
-                    if os.path.exists(dest):
-                        for root, dirs, files in os.walk(dest):
-                            for f in files:
-                                affected_paths.append(os.path.join(root, f))
+            affected_paths = self._collect_action_affected_paths(actions)
 
             for item in files_to_download:
                 tp = item['_target_abs']
@@ -2718,25 +2789,8 @@ class Api:
             try:
                 # 执行 actions
                 for action in actions:
-                    if action.get('type') == 'delete_keyword':
-                        t_folder = action.get('_folder_abs', '')
-                        keyword = action.get('keyword', '')
-                        if os.path.exists(t_folder) and keyword:
-                            for f in os.listdir(t_folder):
-                                if keyword.lower() in f.lower():
-                                    try:
-                                        os.remove(os.path.join(t_folder, f))
-                                        self.log(f"删: {f}")
-                                    except: pass
-                    elif action.get('type') == 'delete':
-                        try: os.remove(action.get('_path_abs', ''))
-                        except: pass
-                    elif action.get('type') == 'copy_folder':
-                        src = action.get('_src_abs', '')
-                        dest = action.get('_dest_abs', '')
-                        if os.path.exists(src):
-                            shutil.copytree(src, dest, dirs_exist_ok=True)
-                            self.log(f"合并配置: {action.get('src')}")
+                    report_step(self._get_update_action_label(action))
+                    self._apply_update_action(action)
 
                 # 移动暂存文件
                 for item in files_to_download:
@@ -4997,6 +5051,8 @@ class Api:
                 for action in actions:
                     if isinstance(action, dict):
                         collect(action.get('path'))
+                        collect(action.get('folder'))
+                        collect(action.get('dest'))
                         collect(action.get('target'))
                         collect(action.get('from'))
                         collect(action.get('to'))
@@ -5537,24 +5593,7 @@ class Api:
                 global_window.evaluate_js("onUpdateApplying()")
 
             # 收集所有受影响的文件路径（用于备份）
-            affected_paths = []
-            for action in actions:
-                if action.get('type') == 'delete_keyword':
-                    t_folder = action.get('_folder_abs', '')
-                    keyword = action.get('keyword', '')
-                    if os.path.exists(t_folder) and keyword:
-                        for f in os.listdir(t_folder):
-                            if keyword.lower() in f.lower():
-                                affected_paths.append(os.path.join(t_folder, f))
-                elif action.get('type') == 'delete':
-                    p = action.get('_path_abs', '')
-                    affected_paths.append(p)
-                elif action.get('type') == 'copy_folder':
-                    dest = action.get('_dest_abs', '')
-                    if os.path.exists(dest):
-                        for root, dirs, files in os.walk(dest):
-                            for f in files:
-                                affected_paths.append(os.path.join(root, f))
+            affected_paths = self._collect_action_affected_paths(actions)
 
             for item in files_to_download:
                 target_path = item['_target_abs']
@@ -5570,38 +5609,8 @@ class Api:
                 # 执行 Actions
                 for action in actions:
                     current_op[0] += 1
-                    op_name = "清理旧文件"
-                    if action.get('type') == 'copy_folder': op_name = "覆盖配置"
-                    report_step(op_name)
-
-                    if action.get('type') == 'delete_keyword':
-                        t_folder = action.get('_folder_abs', '')
-                        keyword = action.get('keyword', '')
-                        if os.path.exists(t_folder) and keyword:
-                            for f in os.listdir(t_folder):
-                                if keyword.lower() in f.lower():
-                                    try:
-                                        os.remove(os.path.join(t_folder, f))
-                                        self.log(f"删: {f}")
-                                        log_info(f"删除文件: {f}")
-                                    except: pass
-                    elif action.get('type') == 'delete':
-                        try:
-                            target = action.get('_path_abs', '')
-                            os.remove(target)
-                            log_info(f"删除文件: {action.get('path')}")
-                        except: pass
-                    elif action.get('type') == 'copy_folder':
-                        src = action.get('_src_abs', '')
-                        dest = action.get('_dest_abs', '')
-                        if os.path.exists(src):
-                            try:
-                                shutil.copytree(src, dest, dirs_exist_ok=True)
-                                self.log(f"合并配置: {action.get('src')} -> {dest}")
-                                log_info(f"合并配置文件夹: {action.get('src')} -> {dest}")
-                            except Exception as e:
-                                self.log(f"合并失败: {e}")
-                                log_error(f"合并文件夹失败: {e}")
+                    report_step(self._get_update_action_label(action))
+                    self._apply_update_action(action)
 
                 # 从暂存区移动文件到目标位置
                 for item in files_to_download:

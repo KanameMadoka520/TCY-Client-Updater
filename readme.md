@@ -481,6 +481,32 @@ https://tcymc.space
 
 ## manifest.json 格式 (v1.0.3 更新)
 
+`actions` 支持删除、目录合并和内嵌单文件覆盖：
+
+```json
+{
+  "actions": [
+    {
+      "type": "delete_keyword",
+      "folder": ".minecraft/versions/异界战斗幻想/mods",
+      "keyword": "old-mod-id"
+    },
+    {
+      "type": "copy_folder",
+      "src": "payload/kubejs/server_scripts",
+      "dest": ".minecraft/versions/异界战斗幻想/kubejs/server_scripts"
+    },
+    {
+      "type": "copy_file",
+      "src": "payload/servers.dat",
+      "dest": ".minecraft/versions/异界战斗幻想/servers.dat"
+    }
+  ]
+}
+```
+
+`copy_file` 的 `src` 必须指向更新 zip 解压后的文件，`dest` 必须是游戏根目录下的相对文件路径。更新器会在覆盖前备份已存在的目标文件；如果 zip 内缺少 `src` 文件，更新会失败并触发回滚。
+
 `external_files` 条目新增可选 `sha256` 字段，向后兼容：
 
 ```json
@@ -823,8 +849,12 @@ python build.py
   * 新版更新器固定生成 `TCYClientUpdater-<版本>.exe`，不再沿用用户改名后的旧文件名。
   * 自更新脚本会先备份当前运行的旧 EXE，安装或启动失败时尽量回滚；新 EXE 启动成功后清理被用户改名的旧版 EXE。
   * 源码运行模式不再执行自更新，避免把 Python 解释器路径当成待替换的更新器文件。
+* **更新包 manifest 增强**:
+  * `manifest.json` 新增 `copy_file` action，支持把更新 zip 内的单个文件复制到指定相对路径。
+  * 本地 ZIP 安装和线上更新流程共用同一套 `copy_file` 实现，覆盖前只备份目标文件本身，避免为了同步根目录单文件而备份整个版本目录。
+  * 本地 ZIP 预览会识别 `copy_file` 操作，更新过程中显示“覆盖文件”步骤。
 * **更新包路径安全加固**:
-  * 更新 zip 解压和 `manifest.json` 中的 `delete` / `delete_keyword` / `copy_folder` / `external_files` 路径统一校验，拒绝绝对路径、`../` 逃逸和 Windows drive-relative 写法。
+  * 更新 zip 解压和 `manifest.json` 中的 `delete` / `delete_keyword` / `copy_folder` / `copy_file` / `external_files` 路径统一校验，拒绝绝对路径、`../` 逃逸和 Windows drive-relative 写法。
   * 存档、NBT 存档入口、Crash Log 读取、Mod 启停、Mod 预设导入/加载等文件操作接口补充直接子项校验，避免外部参数越界删除、读取或重命名项目外文件。
 
 ### v1.0.7 (2026-03-13)
